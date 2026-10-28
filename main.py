@@ -5,13 +5,11 @@ from typing import List, Dict, Optional
 
 # Исправленные импорты!
 from vk_api import VkApi  # Для создания сессии
-from vk_api.bot_longpoll import VkBotLongPoll, VkBotEventType  # Новые пути импорта
 
 
 class RoyalADVBot:
     def __init__(self):
         self.vk_session = None
-        self.longpoll = None
         self.chat_peer_id = None
         self.admin_ids = []
         self.required_groups = [
@@ -22,14 +20,6 @@ class RoyalADVBot:
         ]
         self.logger = logging.getLogger(__name__)
     
-    def init_vk(self, token: str, chat_peer_id: int, admin_ids: List[int]):
-        self.vk_session = VkApi(token=token)
-        
-        # Передаём ID чата явно вместо попытки получить его из токена
-        self.longpoll = VkBotLongPoll(self.vk_session, group_id=chat_peer_id)  
-        self.chat_peer_id = chat_peer_id
-        self.admin_ids = admin_ids
-    
     @staticmethod
     def extract_group_id(url: str) -> Optional[str]:
         if "/club" in url or "/public" in url:
@@ -38,6 +28,11 @@ class RoyalADVBot:
             return url.replace("vk.", "")
         else:
             return None
+    
+    def init_vk(self, token: str, chat_peer_id: int, admin_ids: List[int]):
+        self.vk_session = VkApi(token=token)
+        self.chat_peer_id = chat_peer_id
+        self.admin_ids = admin_ids
     
     def is_user_subscribed_to_all(self, user_id: int) -> bool:
         for group_url in self.required_groups:
