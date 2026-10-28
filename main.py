@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request, Response
 import os
 import json
+import time
 from vk_api import VkApi
 from vk_api.utils import get_random_id
 from dotenv import load_dotenv
@@ -17,11 +18,12 @@ GROUP_ID = int(os.getenv("GROUP_ID"))
 app = FastAPI()
 vk_session = VkApi(token=VK_TOKEN)
 
-# --- База данных в памяти (чтобы не спамить приветствием) ---
-# Словарь: {user_id: True} — значит, приветствие уже отправлено.
-user_welcomed = {}
+# --- База данных в памяти ---
+user_welcomed = {}        # Кто уже получал приветствие
+last_check_time = {}      # Время последней проверки "Готово"
+member_names = {}         # Кэш имен пользователей (чтобы не спрашивать API каждый раз)
 
-# --- ОБНОВЛЕННЫЙ СПИСОК ГРУПП (скопировал из твоего сообщения) ---
+# --- Список групп ---
 GROUPS = [
     "https://vk.ru/club241519834",
     "https://vk.ru/club241781796",
@@ -46,6 +48,23 @@ def extract_group_id(url: str):
     if "/club" in url or "/public" in url:
         return url.split("/")[-1]
     return None
+
+def get_user_name(user_id: int) -> str:
+    # Если имя уже спрашивали - берем из памяти
+    if user_id in member_names:
+        return member_names[user_id]
+    
+    # Если нет - спрашиваем у ВК
+    try:
+        response = vk_session.method("users.get", {"user_ids": user_id, "fields": "first_name, last_name"})
+        if response:
+            user = response[0]
+            full_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
+            member_names[user_id] = full_name
+            return full_name
+    except Exception:
+        pass
+    return "Участник" # Если ВК не ответил
 
 def send_message(peer_id: int, message: str):
     try:
@@ -87,17 +106,27 @@ async def webhook(request: Request):
         text = msg.get("text", "").strip().lower()
         action = msg.get("action")
 
-        # --- 1. ПРИВЕТСТВИЕ НОВОГО ЧЕЛОВЕКА ---
+        # --- 1. ПРОВЕРКА: А есть ли этот человек в чате вообще? ---
+        try:
+            members = vk_session.method("messages.getConversationMembers", {"peer_id": CHAT_PEER_ID})
+            profiles = members.get("profiles", [])
+            user_in_chat = any(p.get("id") == from_id for p in profiles)
+        except Exception:
+            user_in_chat = False
+
+        if not user_in_chat:
+            # Если человека нет в чате (например, это сообщение от самого бота или ошибка), игнорируем
+            return {"status": "user not in chat"}
+
+        # --- 2. ПРИВЕТСТВИЕ (только если это событие входа) ---
         if action and action.get("type") == "chat_invite_user":
             member_id = action.get("member_id")
-            
-            # Проверяем, здоровались ли мы уже с ним
             if member_id not in user_welcomed:
-                # Запоминаем, что поздоровались
                 user_welcomed[member_id] = True
                 
+                name = get_user_name(member_id)
                 welcome_text = (
-                    "👑 ДОБРО ПОЖАЛОВАТЬ В ROYAL LOBBY | ВХОД В ЧАТ АКТИВНОСТИ\n\n"
+                    f"👑 ДОБРО ПОЖАЛОВАТЬ В ROYAL LOBBY, {name}!\n\n"
                     "Чтобы получить пропуск в основное премиум-сообщество Royal ADV | Актив, вам необходимо выполнить главное условие клуба — оформить подписку на всех действующих резидентов.\n\n"
                     "⚜️ Каналы админов:\n"
                     "1. Татьяна Ковбасюк\n"
@@ -127,15 +156,18 @@ async def webhook(request: Request):
                     "🛡 Важно:\n"
                     "Мы регулярно проверяем списки. Те, кто отпишется после входа в чат, будут забанены навсегда без права возврата!"
                 )
-                send_message(CHAT_PEER_ID, f"[id{member_id}|Участник]\n{welcome_text}")
+                send_message(CHAT_PEER_ID, welcome_text)
 
-        # --- 2. ПРОВЕРКА ПОДПИСОК (только слово ГОТОВО) ---
+        # --- 3. ПРОВЕРКА ПОДПИСОК (только слово ГОТОВО) ---
         if text == "готово":
-            # Защита от тех, кто зашел, но мы их еще не приветствовали (на всякий случай)
-            if from_id not in user_welcomed:
-                send_message(CHAT_PEER_ID, f"[id{from_id}|Ошибка] Сначала бот должен вас поприветствовать. Если этого не произошло — напишите админу.")
+            # Защита от спама (раз в 30 секунд)
+            current_time = int(time.time())
+            if (current_time - last_check_time.get(from_id, 0)) < 30:
                 return {"status": "ok"}
+            last_check_time[from_id] = current_time
 
+            name = get_user_name(from_id)
+            
             missing = []
             for u in GROUPS:
                 gid = extract_group_id(u)
@@ -147,10 +179,10 @@ async def webhook(request: Request):
                     missing.append(u)
             
             if not missing:
-                send_message(CHAT_PEER_ID, f"[id{from_id}|✅] Проверка пройдена! Ожидайте, пока админ добавит вас в основной чат.")
+                send_message(CHAT_PEER_ID, f"[id{from_id}|✅] {name}, проверка пройдена! Ожидайте админа.")
             else:
                 miss_text = "\n".join(missing[:5])
-                send_message(CHAT_PEER_ID, f"[id{from_id}|❌] Проверка не пройдена. Вы не подписаны на:\n{miss_text}\n\nПодпишитесь и напишите «ГОТОВО» снова.")
+                send_message(CHAT_PEER_ID, f"[id{from_id}|❌] {name}, проверка не пройдена. Вы не подписаны на:\n{miss_text}\n\nПодпишитесь и напишите «ГОТОВО» снова.")
 
     return {"status": "ok"}
 
