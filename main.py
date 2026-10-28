@@ -1,83 +1,111 @@
+from fastapi import FastAPI, Request
 import os
 import json
 from vk_api import VkApi
 from vk_api.utils import get_random_id
 
-# --- Чтение настроек ---
+# --- ЧИТАЕМ НАСТРОЙКИ (Переменные окружения) ---
 TOKEN = os.getenv("VK_COMMUNITY_TOKEN")
 CONFIRM = os.getenv("CONFIRMATION_TOKEN")
 SECRET = os.getenv("SECRET_KEY")
-CHAT_ID = int(os.getenv("CHAT_PEER_ID"))
+CHAT_ID = int(os.getenv("CHAT_PEER_ID", 0)) # Если пусто, будет 0
 
+# --- СПИСОК ГРУПП ---
 GROUPS = [
     "https://vk.ru/club241519834",
     "https://vk.ru/club241781796",
+    # Добавь остальные группы сюда
 ]
 
-def get_id(url):
-    if "/club" in url:
+app = FastAPI()
+
+def get_group_id(url: str):
+    if "/club" in url or "/public" in url:
         return url.split("/")[-1]
     return None
 
-def send(peer_id, text):
-    vk = VkApi(token=TOKEN)
+def send_vk_message(peer_id: int, message: str):
+    if not TOKEN:
+        print("ERROR: Токен не задан в переменных")
+        return
     try:
-        vk.method("messages.send", {"peer_id": peer_id, "message": text, "random_id": get_random_id()})
+        vk = VkApi(token=TOKEN)
+        vk.method("messages.send", {
+            "peer_id": peer_id,
+            "message": message,
+            "random_id": get_random_id(),
+            "dont_parse_links": 1
+        })
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error sending message: {e}")
 
-def app(request):
-    # --- Обработка подтверждения (когда ВК нажимает "Подтвердить") ---
-    if request.method == "GET":
-        return CONFIRM, 200
+# --- ГЛАВНАЯ ТОЧКА ВХОДА ---
+@app.get("/")
+def confirm():
+    # Возвращаем код для подтверждения в ВК
+    return CONFIRM if CONFIRM else "NO_CONFIRM_TOKEN"
 
-    # --- Обработка сообщений из чата ---
-    if request.method == "POST":
-        try:
-            data = json.loads(request.data)
-        except Exception:
-            return "Bad JSON", 400
+@app.post("/")
+async def handle(request: Request):
+    # Если сервер упал и не может прочитать JSON
+    try:
+        data = await request.json()
+    except Exception:
+        return {"error": "invalid json"}
 
-        if data.get("secret") != SECRET:
-            return "Invalid secret", 403
+    # Проверка секретного ключа
+    if data.get("secret") != SECRET:
+        return {"error": "invalid secret"}
 
-        if data.get("type") == "message_new":
-            obj = data.get("object", {})
-            
-            # Проверяем, что сообщение пришло именно в наш чат
-            if obj.get("peer_id") != CHAT_ID:
-                return "ok", 200
+    # --- ОБРАБОТКА СОБЫТИЙ ---
+    if data.get("type") == "confirmation":
+        return CONFIRM if CONFIRM else "error"
 
-            from_id = obj.get("from_id")
-            text = obj.get("text", "")
-            
-            # Если пользователя пригласили
-            action = obj.get("action")
-            if action and action.get("type") == "chat_invite_user":
-                send(CHAT_ID, f"[id{action.get('member_id')}|Новый] зашел в чат!")
-            
-            # Если написали "согласен"
-            if text.lower() == "согласен":
-                lst = "\n".join([f"{i+1}. {u}" for i, u in enumerate(GROUPS)])
-                send(CHAT_ID, f"[id{from_id}|Принято]\n{lst}")
-            
-            # Если написали "готово"
-            if text.strip().lower() == "готово":
-                miss = []
-                for u in GROUPS:
-                    gid = get_id(u)
-                    try:
-                        res = VkApi(token=TOKEN).method("groups.isMember", {"user_id": from_id, "group_id": gid})
-                        if res not in [1, 2]:
-                            miss.append(u)
-                    except Exception:
-                        miss.append(u)
-                
-                if not miss:
-                    send(CHAT_ID, f"[id{from_id}|✅] Всё верно!")
-                else:
-                    send(CHAT_ID, f"[id{from_id}|❌] Нет подписок:\n" + "\n".join(miss[:3]))
-                    
-        return "ok", 200
+    if data.get("type") == "message_new":
+        obj = data.get("object", {})
+        
+        # Игнорируем всё, что не в нашем чате
+        if obj.get("peer_id") != CHAT_ID:
+            return {"status": "not our chat"}
 
-    return "Method Not Allowed", 405
+        from_id = obj.get("from_id")
+        text = obj.get("text", "").strip().lower()
+        action = obj.get("action")
+
+        # Если пользователя пригласили
+        if action and action.get("type") == "chat_invite_user":
+            member_id = action.get("member_id")
+            welcome = (
+                "🚪 ДОБРО ПОЖАЛОВАТЬ!\n\n"
+                "📋 ШАГ 1: Подпишись на список участников.\n"
+                "💬 ШАГ 2: Напиши кодовое слово: ГОТОВО"
+            )
+            send_vk_message(CHAT_ID, f"[id{member_id}|Новый] зашел!\n{welcome}")
+
+        # Если написали "согласен"
+        if text == "согласен":
+            lst = "\n".join([f"{i+1}. {url}" for i, url in enumerate(GROUPS)])
+            send_vk_message(CHAT_ID, f"[id{from_id}|Принято]\n{lst}")
+
+        # Если написали "готово"
+        if text == "готово":
+            missing = []
+            for url in GROUPS:
+                gid = get_group_id(url)
+                if not gid:
+                    continue
+                try:
+                    vk = VkApi(token=TOKEN)
+                    res = vk.method("groups.isMember", {"user_id": from_id, "group_id": gid})
+                    if res not in [1, 2]:
+                        missing.append(url)
+                except Exception:
+                    missing.append(url)
+
+            if not missing:
+                send_vk_message(CHAT_ID, f"[id{from_id}|✅] Проверка пройдена! Жди админа.")
+            else:
+                miss_text = "\n".join(missing[:5])
+                send_vk_message(CHAT_ID, f"[id{from_id}|❌] Нет подписок:\n{miss_text}")
+
+    return {"status": "ok"}
