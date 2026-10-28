@@ -19,10 +19,10 @@ app = FastAPI()
 vk_session = VkApi(token=VK_TOKEN)
 
 # --- Память бота ---
-# {user_id: "Имя Фамилия"}. Если ID есть в этом списке - мы его уже приветствовали.
+# {user_id: "Имя Фамилия"}. Если ID здесь есть — мы его уже знаем/приветствовали.
 member_names = {}         
 
-# {user_id: timestamp} — время последней проверки "Готово", чтобы не спамить ошибкой
+# {user_id: timestamp} — время последней проверки "Готово" (защита от спама)
 last_check_time = {}      
 
 # --- Список групп ---
@@ -91,82 +91,74 @@ async def webhook(request: Request):
         text = msg.get("text", "").strip().lower()
         action = msg.get("action")
 
-        # --- 1. ПРОВЕРКА: А есть ли он в чате? (Защита от левых сообщений) ---
+        # --- 1. ПРОВЕРКА: Есть ли юзер в чате? ---
         try:
             members = vk_session.method("messages.getConversationMembers", {"peer_id": CHAT_PEER_ID})
             user_in_chat = any(p.get("id") == from_id for p in members.get("profiles", []))
         except Exception:
             user_in_chat = False
-
+        
         if not user_in_chat:
             return {"status": "user not in chat"}
 
-        # --- 2. ПРИВЕТСТВИЕ (САМАЯ ВАЖНАЯ ЧАСТЬ) ---
-        # Если это событие входа (приглашения)
-        if action and action.get("type") == "chat_invite_user":
-            member_id = action.get("member_id")
+        # --- 2. ПРИВЕТСТВИЕ (ГЛАВНАЯ ФИКСА) ---
+        # Здороваемся ТОЛЬКО если этого ID еще нет в нашей памяти
+        if from_id not in member_names:
+            # Запоминаем его сразу, чтобы дубли не прошли
+            member_names[from_id] = "loading" 
             
-            # Если этого ID еще нет в нашей памяти имен - приветствуем
-            if member_id not in member_names:
-                # Запоминаем, что мы его видели
-                member_names[member_id] = "loading"
-                
-                try:
-                    response = vk_session.method("users.get", {"user_ids": member_id, "fields": "first_name, last_name"})
-                    if response:
-                        user = response[0]
-                        full_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
-                        member_names[member_id] = full_name
-                    else:
-                        member_names[member_id] = "Участник"
-                except Exception:
-                    member_names[member_id] = "Участник"
-
-                name = member_names[member_id]
-                welcome_text = (
-                    f"👑 ДОБРО ПОЖАЛОВАТЬ В ROYAL LOBBY, {name}!\n\n"
-                    "Чтобы получить пропуск в основное премиум-сообщество Royal ADV | Актив, вам необходимо выполнить главное условие клуба — оформить подписку на всех действующих резидентов.\n\n"
-                    "⚜️ Каналы админов:\n"
-                    "1. Татьяна Ковбасюк\n"
-                    "2. Олеся Тертишникова\n"
-                    "3. Bedroom Moder \n\n"
-                    "✅ Действующие участники:\n"
-                    "1. Александра Шлыкова — https://vk.ru/club241519834\n"
-                    "2. Мария Макарова — https://vk.ru/club241781796\n"
-                    "3. Инна Р — https://vk.ru/club241187158\n"
-                    "4. Мария Ивлева — https://vk.ru/maria_grechka\n"
-                    "5. Елизавета Фельдберг — https://vk.ru/feldberg.haos\n"
-                    "6. Ирина Кулочкина — https://vk.ru/club242069966\n"
-                    "7. Марина Нефёдова — https://vk.ru/marinafinancelife\n"
-                    "8. Саида Тихомирова — https://vk.ru/club241309196\n"
-                    "9. Миля Риклановна — https://vk.ru/mi.a.deko\n"
-                    "10. Ирина Остробокова — https://vk.ru/krowka_lili\n"
-                    "11. Алёна Андреева — https://vk.ru/club242398054\n"
-                    "12. Диана Каут — https://vk.ru/club236044126\n"
-                    "13. Elena Karjala — https://vk.ru/club242182095\n"
-                    "14. Алексей Абрамов — https://vk.ru/abramov_daily\n"
-                    "15. Marla Singer — https://vk.ru/club225748917\n"
-                    "16. Анастасия Лопатина — https://vk.ru/club238235885\n"
-                    "17. Татьяна Крявкина — https://vk.ru/club242418956\n\n"
-                    "📝 Что делать после подписки?\n"
-                    "Как только вы подписались на все сообщества из списков выше — напишите в этот чат кодовое слово «ГОТОВО».\n"
-                    "После проверки подписок администратор или бот одобрит вашу заявку на вход в главный чат активности.\n\n"
-                    "🛡 Важно:\n"
-                    "Мы регулярно проверяем списки. Те, кто отпишется после входа в чат, будут забанены навсегда без права возврата!"
-                )
-                send_message(CHAT_PEER_ID, welcome_text)
-
-        # --- 3. ПРОВЕРКА ПОДПИСОК (на слово ГОТОВО) ---
-        if text == "готово":
-            # Если человек пишет "готово", но мы его почему-то не знаем (баг), добавляем в базу
-            if from_id not in member_names:
+            try:
+                response = vk_session.method("users.get", {"user_ids": from_id, "fields": "first_name, last_name"})
+                if response:
+                    user = response[0]
+                    full_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
+                    member_names[from_id] = full_name
+                else:
+                    member_names[from_id] = "Участник"
+            except Exception:
                 member_names[from_id] = "Участник"
-            
+
+            name = member_names[from_id]
+            welcome_text = (
+                f"👑 ДОБРО ПОЖАЛОВАТЬ В ROYAL LOBBY, [id{from_id}|{name}]!\n\n"
+                "Чтобы получить пропуск в основное премиум-сообщество Royal ADV | Актив, вам необходимо выполнить главное условие клуба — оформить подписку на всех действующих резидентов.\n\n"
+                "⚜️ Каналы админов:\n"
+                "1. Татьяна Ковбасюк\n"
+                "2. Олеся Тертишникова\n"
+                "3. Bedroom Moder \n\n"
+                "✅ Действующие участники:\n"
+                "1. Александра Шлыкова — https://vk.ru/club241519834\n"
+                "2. Мария Макарова — https://vk.ru/club241781796\n"
+                "3. Инна Р — https://vk.ru/club241187158\n"
+                "4. Мария Ивлева — https://vk.ru/maria_grechka\n"
+                "5. Елизавета Фельдберг — https://vk.ru/feldberg.haos\n"
+                "6. Ирина Кулочкина — https://vk.ru/club242069966\n"
+                "7. Марина Нефёдова — https://vk.ru/marinafinancelife\n"
+                "8. Саида Тихомирова — https://vk.ru/club241309196\n"
+                "9. Миля Риклановна — https://vk.ru/mi.a.deko\n"
+                "10. Ирина Остробокова — https://vk.ru/krowka_lili\n"
+                "11. Алёна Андреева — https://vk.ru/club242398054\n"
+                "12. Диана Каут — https://vk.ru/club236044126\n"
+                "13. Elena Karjala — https://vk.ru/club242182095\n"
+                "14. Алексей Абрамов — https://vk.ru/abramov_daily\n"
+                "15. Marla Singer — https://vk.ru/club225748917\n"
+                "16. Анастасия Лопатина — https://vk.ru/club238235885\n"
+                "17. Татьяна Крявкина — https://vk.ru/club242418956\n\n"
+                "📝 Что делать после подписки?\n"
+                "Как только вы подписались на все сообщества из списков выше — напишите в этот чат кодовое слово «ГОТОВО».\n"
+                "После проверки подписок администратор или бот одобрит вашу заявку на вход в главный чат активности.\n\n"
+                "🛡 Важно:\n"
+                "Мы регулярно проверяем списки. Те, кто отпишется после входа в чат, будут забанены навсегда без права возврата!"
+            )
+            send_message(CHAT_PEER_ID, welcome_text)
+
+        # --- 3. ПРОВЕРКА ПОДПИСОК ---
+        if text == "готово":
             name = member_names[from_id]
             current_time = int(time.time())
 
-            # Защита от спама ошибкой (раз в 45 секунд)
-            if (current_time - last_check_time.get(from_id, 0)) < 45:
+            # Защита от спама ошибкой (раз в 5 секунд)
+            if (current_time - last_check_time.get(from_id, 0)) < 5:
                 return {"status": "ok"}
             
             last_check_time[from_id] = current_time
