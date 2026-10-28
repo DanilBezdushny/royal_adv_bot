@@ -19,11 +19,8 @@ app = FastAPI()
 vk_session = VkApi(token=VK_TOKEN)
 
 # --- Память бота ---
-# {user_id: "Имя Фамилия"}. Если ID здесь есть — мы его уже знаем/приветствовали.
-member_names = {}         
-
-# {user_id: timestamp} — время последней проверки "Готово" (защита от спама)
-last_check_time = {}      
+member_names = {}         # {user_id: "Имя Фамилия"}
+last_check_time = {}      # {user_id: timestamp} — время последней проверки "Готово"
 
 # --- Список групп ---
 GROUPS = [
@@ -91,7 +88,7 @@ async def webhook(request: Request):
         text = msg.get("text", "").strip().lower()
         action = msg.get("action")
 
-        # --- 1. ПРОВЕРКА: Есть ли юзер в чате? ---
+        # --- 1. ПРОВЕРКА: Есть ли юзер в чате? (Обязательно) ---
         try:
             members = vk_session.method("messages.getConversationMembers", {"peer_id": CHAT_PEER_ID})
             user_in_chat = any(p.get("id") == from_id for p in members.get("profiles", []))
@@ -102,11 +99,12 @@ async def webhook(request: Request):
             return {"status": "user not in chat"}
 
         # --- 2. ПРИВЕТСТВИЕ (ГЛАВНАЯ ФИКСА) ---
-        # Здороваемся ТОЛЬКО если этого ID еще нет в нашей памяти
+        # Проверяем по from_id. Если его нет в словаре вообще - здороваемся.
         if from_id not in member_names:
-            # Запоминаем его сразу, чтобы дубли не прошли
+            # Ставим заглушку, чтобы второй поток кода не продублировал сообщение
             member_names[from_id] = "loading" 
             
+            # Запрашиваем имя
             try:
                 response = vk_session.method("users.get", {"user_ids": from_id, "fields": "first_name, last_name"})
                 if response:
@@ -157,7 +155,7 @@ async def webhook(request: Request):
             name = member_names[from_id]
             current_time = int(time.time())
 
-            # Защита от спама ошибкой (раз в 5 секунд)
+            # Защита от спама (раз в 5 секунд)
             if (current_time - last_check_time.get(from_id, 0)) < 5:
                 return {"status": "ok"}
             
