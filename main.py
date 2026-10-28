@@ -18,10 +18,12 @@ GROUP_ID = int(os.getenv("GROUP_ID"))
 app = FastAPI()
 vk_session = VkApi(token=VK_TOKEN)
 
-# --- База данных в памяти ---
-user_welcomed = {}        # Кто уже получал приветствие
-last_check_time = {}      # Время последней проверки "Готово"
-member_names = {}         # Кэш имен пользователей (чтобы не спрашивать API каждый раз)
+# --- Память бота ---
+# {user_id: "Имя Фамилия"}. Если ID есть в этом списке - мы его уже приветствовали.
+member_names = {}         
+
+# {user_id: timestamp} — время последней проверки "Готово", чтобы не спамить ошибкой
+last_check_time = {}      
 
 # --- Список групп ---
 GROUPS = [
@@ -48,23 +50,6 @@ def extract_group_id(url: str):
     if "/club" in url or "/public" in url:
         return url.split("/")[-1]
     return None
-
-def get_user_name(user_id: int) -> str:
-    # Если имя уже спрашивали - берем из памяти
-    if user_id in member_names:
-        return member_names[user_id]
-    
-    # Если нет - спрашиваем у ВК
-    try:
-        response = vk_session.method("users.get", {"user_ids": user_id, "fields": "first_name, last_name"})
-        if response:
-            user = response[0]
-            full_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
-            member_names[user_id] = full_name
-            return full_name
-    except Exception:
-        pass
-    return "Участник" # Если ВК не ответил
 
 def send_message(peer_id: int, message: str):
     try:
@@ -106,25 +91,38 @@ async def webhook(request: Request):
         text = msg.get("text", "").strip().lower()
         action = msg.get("action")
 
-        # --- 1. ПРОВЕРКА: А есть ли этот человек в чате вообще? ---
+        # --- 1. ПРОВЕРКА: А есть ли он в чате? (Защита от левых сообщений) ---
         try:
             members = vk_session.method("messages.getConversationMembers", {"peer_id": CHAT_PEER_ID})
-            profiles = members.get("profiles", [])
-            user_in_chat = any(p.get("id") == from_id for p in profiles)
+            user_in_chat = any(p.get("id") == from_id for p in members.get("profiles", []))
         except Exception:
             user_in_chat = False
 
         if not user_in_chat:
-            # Если человека нет в чате (например, это сообщение от самого бота или ошибка), игнорируем
             return {"status": "user not in chat"}
 
-        # --- 2. ПРИВЕТСТВИЕ (только если это событие входа) ---
+        # --- 2. ПРИВЕТСТВИЕ (САМАЯ ВАЖНАЯ ЧАСТЬ) ---
+        # Если это событие входа (приглашения)
         if action and action.get("type") == "chat_invite_user":
             member_id = action.get("member_id")
-            if member_id not in user_welcomed:
-                user_welcomed[member_id] = True
+            
+            # Если этого ID еще нет в нашей памяти имен - приветствуем
+            if member_id not in member_names:
+                # Запоминаем, что мы его видели
+                member_names[member_id] = "loading"
                 
-                name = get_user_name(member_id)
+                try:
+                    response = vk_session.method("users.get", {"user_ids": member_id, "fields": "first_name, last_name"})
+                    if response:
+                        user = response[0]
+                        full_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
+                        member_names[member_id] = full_name
+                    else:
+                        member_names[member_id] = "Участник"
+                except Exception:
+                    member_names[member_id] = "Участник"
+
+                name = member_names[member_id]
                 welcome_text = (
                     f"👑 ДОБРО ПОЖАЛОВАТЬ В ROYAL LOBBY, {name}!\n\n"
                     "Чтобы получить пропуск в основное премиум-сообщество Royal ADV | Актив, вам необходимо выполнить главное условие клуба — оформить подписку на всех действующих резидентов.\n\n"
@@ -158,16 +156,21 @@ async def webhook(request: Request):
                 )
                 send_message(CHAT_PEER_ID, welcome_text)
 
-        # --- 3. ПРОВЕРКА ПОДПИСОК (только слово ГОТОВО) ---
+        # --- 3. ПРОВЕРКА ПОДПИСОК (на слово ГОТОВО) ---
         if text == "готово":
-            # Защита от спама (раз в 30 секунд)
+            # Если человек пишет "готово", но мы его почему-то не знаем (баг), добавляем в базу
+            if from_id not in member_names:
+                member_names[from_id] = "Участник"
+            
+            name = member_names[from_id]
             current_time = int(time.time())
-            if (current_time - last_check_time.get(from_id, 0)) < 30:
+
+            # Защита от спама ошибкой (раз в 45 секунд)
+            if (current_time - last_check_time.get(from_id, 0)) < 45:
                 return {"status": "ok"}
+            
             last_check_time[from_id] = current_time
 
-            name = get_user_name(from_id)
-            
             missing = []
             for u in GROUPS:
                 gid = extract_group_id(u)
