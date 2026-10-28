@@ -117,3 +117,6 @@ async def webhook(request: Request):
             handle_user_message(from_id, text)
 
     return {"status": "ok"}
+@app.get("/test") 
+def test_page(): 
+    return "SERVER IS ALIVE AND WORKING"
