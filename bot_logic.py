@@ -5,13 +5,11 @@ from typing import List, Dict, Optional
 
 # Исправленные импорты!
 from vk_api import VkApi  # Для создания сессии
-from vk_api.bot_longpoll import VkBotLongPoll, VkBotEventType  # Новые пути импорта
 
 
 class RoyalADVBot:
     def __init__(self):
         self.vk_session = None
-        self.longpoll = None
         self.chat_peer_id = None
         self.admin_ids = []
         self.required_groups = [
@@ -24,9 +22,6 @@ class RoyalADVBot:
     
     def init_vk(self, token: str, chat_peer_id: int, admin_ids: List[int]):
         self.vk_session = VkApi(token=token)
-        
-        # Передаём ID чата явно вместо попытки получить его из токена
-        self.longpoll = VkBotLongPoll(self.vk_session, group_id=chat_peer_id)  
         self.chat_peer_id = chat_peer_id
         self.admin_ids = admin_ids
     
@@ -77,7 +72,7 @@ class RoyalADVBot:
             "📋 ШАГ 1: Подпишитесь на действующий список участников.\n"
             "💬 ШАГ 2: Как только подпишетесь на всех — напишите в этот чат кодовое слово: ГОТОВО\n"
             "После проверки подписок администратор одобрит вашу заявку и пришлет ссылку на главный чат активности! 🚀\n"
-            "⚠️ Важно: Мы регулярно проверяем списки. Те, кто отписывается после входа, удаляются навсегда без право возврата. Давайте расти честно!"
+            "⚠️ Важно: Мы регулярно проверяем списки. Те, кто отписывается после входа, удаляются навсегда без права возврата. Давайте расти честно!"
         )
         self.send_message(peer_id=self.chat_peer_id, message=f"[id{member_id}|Новый участник], добро пожаловать!\n{welcome_text}")
     
@@ -118,17 +113,32 @@ class RoyalADVBot:
                 missing_list = "\n".join(missing_groups[:5])
                 self.send_message(peer_id=self.chat_peer_id, message=f"[id{from_id}|Внимание]!\nПроверка не пройдена. Пожалуйста, подпишитесь на следующие сообщества:\n{missing_list}")
     
-    def run(self):
+    def run_polling(self):
+        last_ts = 0
         while True:
             try:
-                for event in self.longpoll.listen():
-                    if event.type == VkBotEventType.MESSAGE_NEW and event.from_chat:
-                        if event.obj.message.get('action') and event.obj.message['action'].get('type') == 'chat_invite_user':
-                            invited_user_id = event.obj.message['action']['member_id']
-                            self.handle_new_member(invited_user_id)
+                response = self.vk_session.method('messages.getConversationsById', {
+                    'peer_ids': self.chat_peer_id,
+                    'extended': 1,
+                    'fields': 'last_message'
+                })
+                
+                items = response.get('items')
+                if items:
+                    last_message = items[0].get('last_message')
+                    
+                    # Обработка нового участника (если есть действие приглашения)
+                    action = last_message.get('action')
+                    if action and action.get('type') == 'chat_invite_user':
+                        invited_user_id = action['member_id']
+                        self.handle_new_member(invited_user_id)
                         
-                        elif event.obj.message.get('text'):
-                            self.handle_user_message(event.obj.message['from_id'], event.obj.message['text'])
+                    # Обработка обычного сообщения
+                    if last_message.get('text'):
+                        self.handle_user_message(last_message['from_id'], last_message['text'])
+                
+                # Пауза между опросами
+                time.sleep(2)
             except Exception as e:
                 self.logger.exception("Main loop error:")
                 time.sleep(random.randint(5, 15))
