@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 import os
 import json
 from vk_api import VkApi
@@ -38,10 +38,13 @@ def send_message(peer_id: int, message: str):
     except Exception as e:
         print(f"[ERROR] Send: {e}")
 
+# --- ГЛАВНАЯ СТРАНИЦА (исправлено на Response для ВК) ---
 @app.get("/")
 async def confirmation():
-    return CONFIRM_TOKEN
+    # Возвращаем чистый текст без JSON-кавычек
+    return Response(content=CONFIRM_TOKEN, media_type="text/plain", status_code=200)
 
+# --- ВЕБХУК ---
 @app.post("/")
 async def webhook(request: Request):
     try:
@@ -52,15 +55,15 @@ async def webhook(request: Request):
     if data.get("secret") != SECRET_KEY:
         return {"error": "invalid secret"}
 
+    # Подтверждение сервера
     if data.get("type") == "confirmation":
-        return CONFIRM_TOKEN
+        return Response(content=CONFIRM_TOKEN, media_type="text/plain", status_code=200)
 
-    # --- ИСПРАВЛЕННЫЙ БЛОК ОБРАБОТКИ СООБЩЕНИЙ ---
+    # Обработка сообщений
     if data.get("type") == "message_new":
-        # Теперь берем данные из вложенного объекта message
+        # Исправлено: берем данные из вложенного объекта message
         msg = data.get("object", {}).get("message", {})
         
-        # Проверяем, что это наш чат
         if msg.get("peer_id") != CHAT_PEER_ID:
             return {"status": "not our chat"}
 
@@ -68,18 +71,15 @@ async def webhook(request: Request):
         text = msg.get("text", "").strip().lower()
         action = msg.get("action")
 
-        # Если пользователя пригласили
         if action and action.get("type") == "chat_invite_user":
             member_id = action.get("member_id")
             welcome = "🚪 Добро пожаловать!\n📋 Подпишись.\n💬 Напиши ГОТОВО."
             send_message(CHAT_PEER_ID, f"[id{member_id}|Новый] зашел!\n{welcome}")
 
-        # Если написали "согласен"
         if text == "согласен":
             lst = "\n".join([f"{i+1}. {u}" for i, u in enumerate(GROUPS)])
             send_message(CHAT_PEER_ID, f"[id{from_id}|Принято]\n{lst}")
 
-        # Если написали "готово"
         if text == "готово":
             missing = []
             for u in GROUPS:
@@ -99,7 +99,7 @@ async def webhook(request: Request):
 
     return {"status": "ok"}
 
-# --- БЛОК ЗАПУСКА СЕРВЕРА (то, чего не хватало) ---
+# --- ЗАПУСК СЕРВЕРА (для Bothost) ---
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=3000)
