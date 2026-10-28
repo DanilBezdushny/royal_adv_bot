@@ -55,24 +55,31 @@ async def webhook(request: Request):
     if data.get("type") == "confirmation":
         return CONFIRM_TOKEN
 
+    # --- ИСПРАВЛЕННЫЙ БЛОК ОБРАБОТКИ СООБЩЕНИЙ ---
     if data.get("type") == "message_new":
-        obj = data.get("object", {})
-        if obj.get("peer_id") != CHAT_PEER_ID:
+        # Теперь берем данные из вложенного объекта message
+        msg = data.get("object", {}).get("message", {})
+        
+        # Проверяем, что это наш чат
+        if msg.get("peer_id") != CHAT_PEER_ID:
             return {"status": "not our chat"}
 
-        from_id = obj.get("from_id")
-        text = obj.get("text", "").strip().lower()
-        action = obj.get("action")
+        from_id = msg.get("from_id")
+        text = msg.get("text", "").strip().lower()
+        action = msg.get("action")
 
+        # Если пользователя пригласили
         if action and action.get("type") == "chat_invite_user":
             member_id = action.get("member_id")
             welcome = "🚪 Добро пожаловать!\n📋 Подпишись.\n💬 Напиши ГОТОВО."
             send_message(CHAT_PEER_ID, f"[id{member_id}|Новый] зашел!\n{welcome}")
 
+        # Если написали "согласен"
         if text == "согласен":
             lst = "\n".join([f"{i+1}. {u}" for i, u in enumerate(GROUPS)])
             send_message(CHAT_PEER_ID, f"[id{from_id}|Принято]\n{lst}")
 
+        # Если написали "готово"
         if text == "готово":
             missing = []
             for u in GROUPS:
@@ -91,3 +98,8 @@ async def webhook(request: Request):
                 send_message(CHAT_PEER_ID, f"[id{from_id}|❌] Нет подписок:\n{miss_text}")
 
     return {"status": "ok"}
+
+# --- БЛОК ЗАПУСКА СЕРВЕРА (то, чего не хватало) ---
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=3000)
