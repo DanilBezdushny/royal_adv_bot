@@ -2,9 +2,10 @@ import time
 import random
 import logging
 from typing import List, Dict, Optional
-from vk_api import VkApi
-from vk_api.bot_longpoll import VkBotLongPoll, VkBotEventType
-from vk_api.utils import get_random_id
+
+# Исправленные импорты!
+from vk_api import VkApi  # Для создания сессии
+from vk_api.bot_longpoll import VkBotLongPoll, VkBotEventType  # Новые пути импорта
 
 
 class RoyalADVBot:
@@ -16,14 +17,16 @@ class RoyalADVBot:
         self.required_groups = [
             "https://vk.ru/club241519834",
             "https://vk.ru/club241781796",
-            # ... остальные группы из твоего списка ...
+            # ... остальные группы из списка ...
             "https://vk.ru/club242640706"
         ]
         self.logger = logging.getLogger(__name__)
     
     def init_vk(self, token: str, chat_peer_id: int, admin_ids: List[int]):
         self.vk_session = VkApi(token=token)
-        self.longpoll = VkBotLongPoll(self.vk_session, group_id=self.vk_session.token["group_id"])
+        
+        # Передаём ID чата явно вместо попытки получить его из токена
+        self.longpoll = VkBotLongPoll(self.vk_session, group_id=chat_peer_id)  
         self.chat_peer_id = chat_peer_id
         self.admin_ids = admin_ids
     
