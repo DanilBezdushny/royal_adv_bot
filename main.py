@@ -8,4 +8,4 @@ if __name__ == "__main__":
     bot = RoyalADVBot()
     bot.init_vk(VK_COMMUNITY_TOKEN, CHAT_PEER_ID, ADMIN_IDS)
     print("Royal ADV Bot started!")
-    bot.run()
+    bot.run_polling()
