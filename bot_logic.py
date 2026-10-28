@@ -3,7 +3,7 @@ import random
 import logging
 from typing import List, Dict, Optional
 from vk_api import VkApi
-from vk_api.longpoll import VkBotLongPoll, VkBotEventType
+from vk_api.bot_longpoll import VkBotLongPoll, VkBotEventType
 from vk_api.utils import get_random_id
 
 
