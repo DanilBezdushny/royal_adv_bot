@@ -12,7 +12,7 @@ load_dotenv()
 VK_TOKEN = os.getenv("VK_COMMUNITY_TOKEN")
 CONFIRM_TOKEN = os.getenv("CONFIRMATION_TOKEN")
 SECRET_KEY = os.getenv("SECRET_KEY")
-CHAT_PEER_ID = int(os.getenv("CHAT_PEER_ID"))
+CHAT_PEER_ID = int(os.getenv("CHAT_PEER_ID"))  # Твоё значение: 2000000004
 GROUP_ID = int(os.getenv("GROUP_ID"))
 
 app = FastAPI()
@@ -27,7 +27,6 @@ def extract_group_id(url: str):
     if "/club" in url or "/public" in url:
         return url.split("/")[-1]
     elif url.startswith("https://vk.com/id"):
-        # Извлекаем id пользователя из ссылок вида https://vk.com/id...
         return url.split("/id")[1].split()[0]  # Берём всё после /id до первого пробела
     else:
         return None
@@ -54,18 +53,20 @@ async def webhook(request: Request):
     except Exception:
         return {"error": "invalid json"}
 
+    # 👇👇 ЭТО САМАЯ ВАЖНАЯ ЧАСТЬ ДЛЯ РАБОТЫ БОТА! 👇👇
+    # Если секретные ключи не совпадают, бот ничего не делает.
     if data.get("secret") != SECRET_KEY:
-        return {"error": "invalid secret"}
+        return {"error": "invalid secret"}  
 
     if data.get("type") == "confirmation":
         return Response(content=CONFIRM_TOKEN, media_type="text/plain", status_code=200)
 
+    # УБРАЛ ФИЛЬТР НА PEER_ID!
+    # Бот теперь реагирует на любые события от ВК, а не только от конкретного чата.
+    
     if data.get("type") == "message_new":
         msg = data.get("object", {})
         
-        if msg.get("peer_id") != CHAT_PEER_ID:
-            return {"status": "not our chat"}
-
         from_id = msg.get("from_id")
         text = msg.get("text", "").strip().lower()
         action = msg.get("action")
@@ -108,7 +109,7 @@ async def webhook(request: Request):
                 "11. Диана Каут — https://vk.ru/club236044126\n"
                 "12. Elena Karjala — https://vk.ru/club242182095\n"
                 "13. Marla Singer — https://vk.ru/club225748917\n"
-                "14. Татьяна Крявкина - https://vk.ru/club242418956\n"
+                "14. Татьяна Крявкина - https://vk.ru/club242418946\n"
                 "15. Татьяна Воронцова - https://vk.com/id200006469384\n"
                 "16. Ирина Кузьмичева - https://vk.com/irina_chitaet\n"
                 "17. Нина Юшкова - https://vk.ru/ninaural11\n"
