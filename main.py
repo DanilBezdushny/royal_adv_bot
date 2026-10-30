@@ -61,8 +61,7 @@ async def webhook(request: Request):
     if data.get("type") == "confirmation":
         return Response(content=CONFIRM_TOKEN, media_type="text/plain", status_code=200)
 
-    # УБРАЛ ФИЛЬТР НА PEER_ID!
-    # Бот теперь реагирует на любые события от ВК, а не только от конкретного чата.
+    # Теперь мы обрабатываем ВСЕ сообщения, но логика внутри разделена.
     
     if data.get("type") == "message_new":
         msg = data.get("object", {})
@@ -70,10 +69,16 @@ async def webhook(request: Request):
         from_id = msg.get("from_id")
         text = msg.get("text", "").strip().lower()
         action = msg.get("action")
+        peer_id = msg.get("peer_id")
+
+        # Проверяем, является ли это сообщением именно из нашего целевого чата
+        is_target_chat = peer_id == CHAT_PEER_ID
 
         # --- НОВОЕ: ЕДИНОЕ ПРИВЕТСТВИЕ И ССЫЛКИ В ОДНОМ СООБЩЕНИИ ---
-        # Приветствуем ТОЛЬКО если пользователь вошёл или его нет в памяти
-        if (action and action.get("type") == "chat_invite_user" and action.get("member_id") == from_id) or (from_id not in greeted_users and from_id not in member_names):
+        # Приветствуем ТОЛЬКО если пользователь вошёл (и это наш чат) 
+        # ЛИБО если он пишет нам первый раз в нашем чате.
+        if ((is_target_chat and action and action.get("type") == "chat_invite_user" and action.get("member_id") == from_id) 
+                or (is_target_chat and from_id not in greeted_users)):
             
             greeted_users.add(from_id)
             member_names[from_id] = "loading"
@@ -98,7 +103,7 @@ async def webhook(request: Request):
                 "✅ Действующие участники\n\n"
                 "1. Александра Шлыкова — https://vk.ru/club241519834\n"
                 "2. Мария Макарова — https://vk.ru/club241781796\n"
-                "3. Инна Р — https://vk.ru/club241187158\n"
+                "3. Инна Р — https://vk.ru/club41187158\n"
                 "4. Мария Ивлева — https://vk.ru/maria_grechka\n"
                 "5. Елизавета Фельдберг — https://vk.ru/feldberg.haos\n"
                 "6. Ирина Кулочкина —https://vk.ru/club242069966\n"
@@ -135,7 +140,8 @@ async def webhook(request: Request):
                 if gid:
                     GROUPS.append(gid)
 
-        if text == "готово":
+        # Реакция на команду "готово". Работаем только если сообщение из нашего чата.
+        if is_target_chat and text == "готово":
             name = member_names[from_id]
 
             # Проверка на повторное нажатие кнопки "Готово". Если прошло меньше секунды с прошлого раза — игнорируем.
