@@ -32,7 +32,6 @@ GROUPS = [
     "https://vk.ru/club242069966",
     "https://vk.ru/marinafinancelife",
     "https://vk.ru/club241309196",
-    "https://vk.ru/mi.a.deko",
     "https://vk.ru/krowka_lili",
     "https://vk.ru/club242398054",
     "https://vk.ru/club236044126",
@@ -99,14 +98,11 @@ async def webhook(request: Request):
             return {"status": "user not in chat"}
 
         # --- 2. ПРИВЕТСТВИЕ (ГЛАВНАЯ ФИКСА) ---
-        # Проверяем по from_id. Если его нет в словаре вообще - здороваемся.
         if from_id not in member_names:
-            # Ставим заглушку, чтобы второй поток кода не продублировал сообщение
-            member_names[from_id] = "loading" 
+            member_names[from_id] = "loading"
             
-            # Запрашиваем имя
             try:
-                response = vk_session.method("users.get", {"user_ids": from_id, "fields": "first_name, last_name"})
+                response = vk_session.method("users.get", {"user_ids": from_id, "fields": "first_name,last_name"})
                 if response:
                     user = response[0]
                     full_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
@@ -118,12 +114,9 @@ async def webhook(request: Request):
 
             name = member_names[from_id]
             welcome_text = (
-                f"👑 ДОБРО ПОЖАЛОВАТЬ В ROYAL LOBBY, [id{from_id}|{name}]!\n\n"
+                "🚪 ДОБРО ПОЖАЛОВАТЬ В ROYAL LOBBY!\n\n"
+                "Вы попали в приёмную закрытого клуба взаимного продвижения Royal ADV. Сейчас в нашей команде только активные участники, которые ежедневно и честно продвигают друг друга в ВК.\n\n"
                 "Чтобы получить пропуск в основное премиум-сообщество Royal ADV | Актив, вам необходимо выполнить главное условие клуба — оформить подписку на всех действующих резидентов.\n\n"
-                "⚜️ Каналы админов:\n"
-                "1. Татьяна Ковбасюк\n"
-                "2. Олеся Тертишникова\n"
-                "3. Bedroom Moder \n\n"
                 "✅ Действующие участники:\n"
                 "1. Александра Шлыкова — https://vk.ru/club241519834\n"
                 "2. Мария Макарова — https://vk.ru/club241781796\n"
@@ -133,19 +126,20 @@ async def webhook(request: Request):
                 "6. Ирина Кулочкина — https://vk.ru/club242069966\n"
                 "7. Марина Нефёдова — https://vk.ru/marinafinancelife\n"
                 "8. Саида Тихомирова — https://vk.ru/club241309196\n"
-                "9. Миля Риклановна — https://vk.ru/mi.a.deko\n"
-                "10. Ирина Остробокова — https://vk.ru/krowka_lili\n"
-                "11. Алёна Андреева — https://vk.ru/club242398054\n"
-                "12. Диана Каут — https://vk.ru/club236044126\n"
-                "13. Elena Karjala — https://vk.ru/club242182095\n"
-                "14. Алексей Абрамов — https://vk.ru/abramov_daily\n"
-                "15. Marla Singer — https://vk.ru/club225748917\n"
-                "16. Анастасия Лопатина — https://vk.ru/club238235885\n"
-                "17. Татьяна Крявкина — https://vk.ru/club242418956\n\n"
-                "📝 Что делать после подписки?\n"
+                "9. Ирина Остробокова — https://vk.ru/krowka_lili\n"
+                "10. Алёна Андреева — https://vk.ru/club242398054\n"
+                "11. Диана Каут — https://vk.ru/club236044126\n"
+                "12. Elena Karjala — https://vk.ru/club242182095\n"
+                "13. Marla Singer — https://vk.ru/club225748917\n"
+                "14. Татьяна Крявкина - https://vk.ru/club242418956\n"
+                "15. Татьяна Воронцова - https://vk.ru/id200006469384\n"
+                "16. Ирина Кузьмичева - https://vk.com/irina_chitaet\n"
+                "17. Нина Юшкова - https://vk.ru/ninaural11\n"
+                "18. Наталья Рахимовна - https://vk.ru/club242266727\n\n"
+                "📝 Что делать после подписки?\n\n"
                 "Как только вы подписались на все сообщества из списков выше — напишите в этот чат кодовое слово «ГОТОВО».\n"
                 "После проверки подписок администратор или бот одобрит вашу заявку на вход в главный чат активности.\n\n"
-                "🛡 Важно:\n"
+                "🛡 Важно:\n\n"
                 "Мы регулярно проверяем списки. Те, кто отпишется после входа в чат, будут забанены навсегда без права возврата!"
             )
             send_message(CHAT_PEER_ID, welcome_text)
