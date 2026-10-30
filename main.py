@@ -19,34 +19,18 @@ app = FastAPI()
 vk_session = VkApi(token=VK_TOKEN)
 
 # --- Память бота ---
-member_names = {}         # {user_id: "Имя Фамилия"}
-last_check_time = {}      # {user_id: timestamp} — время последней проверки "Готово"
-
-# --- Список групп ---
-GROUPS = [
-    "https://vk.ru/club241519834",
-    "https://vk.ru/club241781796",
-    "https://vk.ru/club241187158",
-    "https://vk.ru/maria_grechka",
-    "https://vk.ru/feldberg.haos",
-    "https://vk.ru/club242069966",
-    "https://vk.ru/marinafinancelife",
-    "https://vk.ru/club241309196",
-    "https://vk.ru/mi.a.deko",
-    "https://vk.ru/krowka_lili",
-    "https://vk.ru/club242398054",
-    "https://vk.ru/club236044126",
-    "https://vk.ru/club242182095",
-    "https://vk.ru/abramov_daily",
-    "https://vk.ru/club225748917",
-    "https://vk.ru/club238235885",
-    "https://vk.ru/club242418956",
-]
+greeted_users = set()  # ID тех, кого уже приветствовали (чтобы не дублировать при перезапуске)
+member_names = {}
+last_check_time = {}   # Для предотвращения мгновенного повторного ответа "Готово"
 
 def extract_group_id(url: str):
     if "/club" in url or "/public" in url:
         return url.split("/")[-1]
-    return None
+    elif url.startswith("https://vk.com/id"):
+        # Извлекаем id пользователя из ссылок вида https://vk.com/id...
+        return url.split("/id")[1].split()[0]  # Берём всё после /id до первого пробела
+    else:
+        return None
 
 def send_message(peer_id: int, message: str):
     try:
@@ -59,12 +43,10 @@ def send_message(peer_id: int, message: str):
     except Exception as e:
         print(f"[ERROR] Send: {e}")
 
-# --- ГЛАВНАЯ СТРАНИЦА ---
 @app.get("/")
 async def confirmation():
     return Response(content=CONFIRM_TOKEN, media_type="text/plain", status_code=200)
 
-# --- ВЕБХУК ---
 @app.post("/")
 async def webhook(request: Request):
     try:
@@ -79,7 +61,7 @@ async def webhook(request: Request):
         return Response(content=CONFIRM_TOKEN, media_type="text/plain", status_code=200)
 
     if data.get("type") == "message_new":
-        msg = data.get("object", {}).get("message", {})
+        msg = data.get("object", {})
         
         if msg.get("peer_id") != CHAT_PEER_ID:
             return {"status": "not our chat"}
@@ -88,23 +70,13 @@ async def webhook(request: Request):
         text = msg.get("text", "").strip().lower()
         action = msg.get("action")
 
-        # --- 1. ПРОВЕРКА: Есть ли юзер в чате? (Обязательно) ---
-        try:
-            members = vk_session.method("messages.getConversationMembers", {"peer_id": CHAT_PEER_ID})
-            user_in_chat = any(p.get("id") == from_id for p in members.get("profiles", []))
-        except Exception:
-            user_in_chat = False
-        
-        if not user_in_chat:
-            return {"status": "user not in chat"}
-
-        # --- 2. ПРИВЕТСТВИЕ (ГЛАВНАЯ ФИКСА) ---
-        # Проверяем по from_id. Если его нет в словаре вообще - здороваемся.
-        if from_id not in member_names:
-            # Ставим заглушку, чтобы второй поток кода не продублировал сообщение
-            member_names[from_id] = "loading" 
+        # --- НОВОЕ: ЕДИНОЕ ПРИВЕТСТВИЕ И ССЫЛКИ В ОДНОМ СООБЩЕНИИ ---
+        # Приветствуем ТОЛЬКО если пользователь вошёл или его нет в памяти
+        if (action and action.get("type") == "chat_invite_user" and action.get("member_id") == from_id) or (from_id not in greeted_users and from_id not in member_names):
             
-            # Запрашиваем имя
+            greeted_users.add(from_id)
+            member_names[from_id] = "loading"
+            
             try:
                 response = vk_session.method("users.get", {"user_ids": from_id, "fields": "first_name, last_name"})
                 if response:
@@ -118,64 +90,91 @@ async def webhook(request: Request):
 
             name = member_names[from_id]
             welcome_text = (
-                f"👑 ДОБРО ПОЖАЛОВАТЬ В ROYAL LOBBY, [id{from_id}|{name}]!\n\n"
+                f"🚪 [id{from_id}|{name}], ДОБРО ПОЖАЛОВАТЬ В ROYAL LOBBY!\n\n"
+                "Вы попали в приемную закрытого клуба взаимного продвижения Royal ADV. Сейчас в нашей команде только активные участники, которые ежедневно и честно продвигают друг друга в ВК.\n\n"
                 "Чтобы получить пропуск в основное премиум-сообщество Royal ADV | Актив, вам необходимо выполнить главное условие клуба — оформить подписку на всех действующих резидентов.\n\n"
-                "⚜️ Каналы админов:\n"
-                "1. Татьяна Ковбасюк\n"
-                "2. Олеся Тертишникова\n"
-                "3. Bedroom Moder \n\n"
-                "✅ Действующие участники:\n"
+                "📋 ШАГ 1: Подпишитесь на действующий список участников:\n\n"
+                "✅ Действующие участники\n\n"
                 "1. Александра Шлыкова — https://vk.ru/club241519834\n"
                 "2. Мария Макарова — https://vk.ru/club241781796\n"
                 "3. Инна Р — https://vk.ru/club241187158\n"
                 "4. Мария Ивлева — https://vk.ru/maria_grechka\n"
                 "5. Елизавета Фельдберг — https://vk.ru/feldberg.haos\n"
-                "6. Ирина Кулочкина — https://vk.ru/club242069966\n"
+                "6. Ирина Кулочкина —https://vk.ru/club242069966\n"
                 "7. Марина Нефёдова — https://vk.ru/marinafinancelife\n"
                 "8. Саида Тихомирова — https://vk.ru/club241309196\n"
-                "9. Миля Риклановна — https://vk.ru/mi.a.deko\n"
-                "10. Ирина Остробокова — https://vk.ru/krowka_lili\n"
-                "11. Алёна Андреева — https://vk.ru/club242398054\n"
-                "12. Диана Каут — https://vk.ru/club236044126\n"
-                "13. Elena Karjala — https://vk.ru/club242182095\n"
-                "14. Алексей Абрамов — https://vk.ru/abramov_daily\n"
-                "15. Marla Singer — https://vk.ru/club225748917\n"
-                "16. Анастасия Лопатина — https://vk.ru/club238235885\n"
-                "17. Татьяна Крявкина — https://vk.ru/club242418956\n\n"
-                "📝 Что делать после подписки?\n"
+                "9. Ирина Остробокова — https://vk.ru/krowka_lili\n"
+                "10. Алёна Андреева — https://vk.ru/club242399654\n"
+                "11. Диана Каут — https://vk.ru/club236044126\n"
+                "12. Elena Karjala — https://vk.ru/club242182095\n"
+                "13. Marla Singer — https://vk.ru/club225748917\n"
+                "14. Татьяна Крявкина - https://vk.ru/club242418956\n"
+                "15. Татьяна Воронцова - https://vk.com/id200006469384\n"
+                "16. Ирина Кузьмичева - https://vk.com/irina_chitaet\n"
+                "17. Нина Юшкова - https://vk.ru/ninaural11\n"
+                "18. Наталья Рахимовна - https://vk.ru/club242266727\n\n"
+                "📝 Что делать после подписки?\n\n"
                 "Как только вы подписались на все сообщества из списков выше — напишите в этот чат кодовое слово «ГОТОВО».\n"
                 "После проверки подписок администратор или бот одобрит вашу заявку на вход в главный чат активности.\n\n"
-                "🛡 Важно:\n"
+                "🛡 Важно:\n\n"
                 "Мы регулярно проверяем списки. Те, кто отпишется после входа в чат, будут забанены навсегда без права возврата!"
             )
             send_message(CHAT_PEER_ID, welcome_text)
+            if action:
+                return {"status": "ok"}  # Выходим сразу, если это было действие приглашения
 
-        # --- 3. ПРОВЕРКА ПОДПИСОК ---
+        # --- ПРОВЕРКА ПОДПИСОК ---
+        # Теперь берём группы прямо из текста приветствия!
+        GROUPS = []
+        for line in welcome_text.split("\n"):
+            if "—" in line:
+                parts = line.strip().split("—")
+                link = parts[-1].strip()
+                gid = extract_group_id(link)
+                if gid:
+                    GROUPS.append(gid)
+
         if text == "готово":
             name = member_names[from_id]
-            current_time = int(time.time())
 
-            # Защита от спама (раз в 5 секунд)
-            if (current_time - last_check_time.get(from_id, 0)) < 5:
+            # Проверка на повторное нажатие кнопки "Готово". Если прошло меньше секунды с прошлого раза — игнорируем.
+            if time.time() - last_check_time.get(from_id, 0) < 1:
                 return {"status": "ok"}
-            
-            last_check_time[from_id] = current_time
+
+            last_check_time[from_id] = time.time()
 
             missing = []
-            for u in GROUPS:
-                gid = extract_group_id(u)
+            for gid in GROUPS:
                 try:
                     res = vk_session.method("groups.isMember", {"user_id": from_id, "group_id": gid})
                     if res not in [1, 2]:
-                        missing.append(u)
+                        missing.append(gid)
                 except Exception:
-                    missing.append(u)
+                    missing.append(gid)
             
             if not missing:
-                send_message(CHAT_PEER_ID, f"[id{from_id}|✅] {name}, проверка пройдена! Ожидайте админа.")
+                success_text = (
+                    "🎉 Поздравляем! Проверка успешно пройдена! 👑\n\n"
+                    "Вы отлично справились со стартовыми условиями и становитесь резидентом нашего закрытого клуба Royal ADV!\n\n"
+                    "📋 ВАШИ СЛЕДУЮЩИЕ ШАГИ:\n\n"
+                    "1️⃣ Ожидайте смс админа: В ближайшее время администратор отправит вам в личные сообщения все рабочие ссылки-доступы на чаты нашей экосистемы (Главный чат активности, Чат для взаимных репостов и Чат для общения и нетворкинга) [⚡️].\n\n"
+                    "👉 Пожалуйста, прямо сейчас убедитесь, что у вас открыты сообщения в профиле, чтобы админ смог до вас дописаться!\n\n"
+                    "2️⃣ Пришлите вашу ссылку на взаимность: Пока вы ждете сообщения от администратора, отправьте прямо сюда (в этот чат приемной) ссылку на вашу группу или страницу. Она необходима, чтобы внести вас в наш общий кликабельный список клуба, и все действующие участники смогли подписаться на вас в ответ!\n\n"
+                    "📌 После перехода в главный чат обязательно изучите закрепленное сообщение — там подробно расписаны правила, дедлайны и лимиты. Пожалуйста, займите свое место в каждом чате, чтобы оставаться в едином рабочем ритме команды!\n\n"
+                    "Рады видеть в команде! Включаем королевские охваты! 📈🔥"
+                )
+                send_message(CHAT_PEER_ID, success_text)
             else:
-                miss_text = "\n".join(missing[:5])
-                send_message(CHAT_PEER_ID, f"[id{from_id}|❌] {name}, проверка не пройдена. Вы не подписаны на:\n{miss_text}\n\nПодпишитесь и напишите «ГОТОВО» снова.")
+                fail_text = (
+                    "🛑 Проверка не пройдена! 👑\n\n"
+                    "Наш бот проверил ресурсы и обнаружил, что вы подписались не на все обязательные сообщества администрации. У нас в клубе действуют строгие правила и 100% честность с первых шагов!\n\n"
+                    "📋 ЧТО НУЖНО СДЕЛАТЬ ПРЯМО СЕЙЧАС:\n\n"
+                    "• Проверьте абсолютно все подписки ещё раз на наличие оформленной подписки на каждое сообщество участников и руководителей.\n\n"
+                    "⏳ Как только внимательно всё перепроверите и убедитесь, что подписаны на каждую группу администрации — напишите сюда кодовое слово «ГОТОВО» еще раз.\n\n"
+                    "Включайте королевскую скорость, мы ждем вас в основном составе Royal ADV! 🤍✨"
+                )
+                final_message = f"[id{from_id}|❌] {name}, вот список групп, где обнаружена проблема:\n" + "\n".join(missing[:5]) + f"\n\n{fail_text}"
+                send_message(CHAT_PEER_ID, final_message)
 
     return {"status": "ok"}
 
