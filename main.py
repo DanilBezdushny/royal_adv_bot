@@ -19,12 +19,8 @@ app = FastAPI()
 vk_session = VkApi(token=VK_TOKEN)
 
 # --- Память бота ---
-# Словарь для хранения ID тех, кого бот уже приветствовал в этой сессии
-# Это временная защита. При перезапуске бота данные сбросятся.
-greeted_users = set() 
-
-member_names = {}
-last_check_time = {}
+member_names = {}         # {user_id: "Имя Фамилия"}
+last_check_time = {}      # {user_id: timestamp} — время последней проверки "Готово"
 
 # --- Список групп ---
 GROUPS = [
@@ -83,9 +79,8 @@ async def webhook(request: Request):
         return Response(content=CONFIRM_TOKEN, media_type="text/plain", status_code=200)
 
     if data.get("type") == "message_new":
-        msg = data.get("object", {})
+        msg = data.get("object", {}).get("message", {})
         
-        # Фильтр только для нашего чата
         if msg.get("peer_id") != CHAT_PEER_ID:
             return {"status": "not our chat"}
 
@@ -93,15 +88,23 @@ async def webhook(request: Request):
         text = msg.get("text", "").strip().lower()
         action = msg.get("action")
 
-        # --- НОВОЕ: ПРИВЕТСТВИЕ ПРИ ВХОДЕ В БЕСЕДУ ---
-        # Срабатывает, когда пользователя приглашают (action.type == chat_invite_user)
-        # или когда он пишет первое сообщение, но его еще нет в памяти бота.
-        if (action and action.get("type") == "chat_invite_user" and action.get("member_id") == from_id) or (from_id not in greeted_users and from_id not in member_names):
-            
-            # Ставим в память, чтобы не дублировать приветствие в рамках одной сессии
-            greeted_users.add(from_id)
+        # --- 1. ПРОВЕРКА: Есть ли юзер в чате? (Обязательно) ---
+        try:
+            members = vk_session.method("messages.getConversationMembers", {"peer_id": CHAT_PEER_ID})
+            user_in_chat = any(p.get("id") == from_id for p in members.get("profiles", []))
+        except Exception:
+            user_in_chat = False
+        
+        if not user_in_chat:
+            return {"status": "user not in chat"}
+
+        # --- 2. ПРИВЕТСТВИЕ (ГЛАВНАЯ ФИКСА) ---
+        # Проверяем по from_id. Если его нет в словаре вообще - здороваемся.
+        if from_id not in member_names:
+            # Ставим заглушку, чтобы второй поток кода не продублировал сообщение
             member_names[from_id] = "loading" 
             
+            # Запрашиваем имя
             try:
                 response = vk_session.method("users.get", {"user_ids": from_id, "fields": "first_name, last_name"})
                 if response:
@@ -115,24 +118,44 @@ async def webhook(request: Request):
 
             name = member_names[from_id]
             welcome_text = (
-                f"🚪 [id{from_id}|{name}], ДОБРО ПОЖАЛОВАТЬ В ROYAL LOBBY!\n\n"
-                "Вы попали в приемную закрытого клуба взаимного продвижения Royal ADV. Сейчас в нашей команде только активные участники, которые ежедневно и честно продвигают друг друга в ВК.\n\n"
-                "Чтобы получить пропуск в главный чат активности, выполните обязательное условие:\n"
-                "📋 ШАГ 1: Подпишитесь на действующий список участников (он находится в закрепленном сообщении этого чата 👆).\n"
-                "💬 ШАГ 2: Как только подпишетесь на всех — напишите в этот чат кодовое слово: ГОТОВО\n\n"
-                "После проверки подписок администратор одобрит вашу заявку и пришлет ссылку на главный чат активности! 🚀\n\n"
-                "⚠️ Важно: Мы регулярно проверяем списки. Те, кто отписывается после входа, удаляются навсегда без права возврата. Давайте расти честно!"
+                f"👑 ДОБРО ПОЖАЛОВАТЬ В ROYAL LOBBY, [id{from_id}|{name}]!\n\n"
+                "Чтобы получить пропуск в основное премиум-сообщество Royal ADV | Актив, вам необходимо выполнить главное условие клуба — оформить подписку на всех действующих резидентов.\n\n"
+                "⚜️ Каналы админов:\n"
+                "1. Татьяна Ковбасюк\n"
+                "2. Олеся Тертишникова\n"
+                "3. Bedroom Moder \n\n"
+                "✅ Действующие участники:\n"
+                "1. Александра Шлыкова — https://vk.ru/club241519834\n"
+                "2. Мария Макарова — https://vk.ru/club241781796\n"
+                "3. Инна Р — https://vk.ru/club241187158\n"
+                "4. Мария Ивлева — https://vk.ru/maria_grechka\n"
+                "5. Елизавета Фельдберг — https://vk.ru/feldberg.haos\n"
+                "6. Ирина Кулочкина — https://vk.ru/club242069966\n"
+                "7. Марина Нефёдова — https://vk.ru/marinafinancelife\n"
+                "8. Саида Тихомирова — https://vk.ru/club241309196\n"
+                "9. Миля Риклановна — https://vk.ru/mi.a.deko\n"
+                "10. Ирина Остробокова — https://vk.ru/krowka_lili\n"
+                "11. Алёна Андреева — https://vk.ru/club242398054\n"
+                "12. Диана Каут — https://vk.ru/club236044126\n"
+                "13. Elena Karjala — https://vk.ru/club242182095\n"
+                "14. Алексей Абрамов — https://vk.ru/abramov_daily\n"
+                "15. Marla Singer — https://vk.ru/club225748917\n"
+                "16. Анастасия Лопатина — https://vk.ru/club238235885\n"
+                "17. Татьяна Крявкина — https://vk.ru/club242418956\n\n"
+                "📝 Что делать после подписки?\n"
+                "Как только вы подписались на все сообщества из списков выше — напишите в этот чат кодовое слово «ГОТОВО».\n"
+                "После проверки подписок администратор или бот одобрит вашу заявку на вход в главный чат активности.\n\n"
+                "🛡 Важно:\n"
+                "Мы регулярно проверяем списки. Те, кто отпишется после входа в чат, будут забанены навсегда без права возврата!"
             )
             send_message(CHAT_PEER_ID, welcome_text)
-            # Если это было действие входа, дальше обрабатывать сообщение не нужно
-            if action:
-                return {"status": "ok"}
 
-        # --- ПРОВЕРКА ПОДПИСОК (остается без изменений) ---
+        # --- 3. ПРОВЕРКА ПОДПИСОК ---
         if text == "готово":
             name = member_names[from_id]
             current_time = int(time.time())
 
+            # Защита от спама (раз в 5 секунд)
             if (current_time - last_check_time.get(from_id, 0)) < 5:
                 return {"status": "ok"}
             
