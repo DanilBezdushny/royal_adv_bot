@@ -141,6 +141,12 @@ async def webhook(request: Request):
         msg = data.get("object").get("message", {})
         
         # *** КРИТИЧЕСКАЯ ПРОВЕРКА ***
+        # ⬇️ Вставьте эти строки сюда ⬇️
+        print(f"[DEBUG] Получено обновление: {data}")
+        if data.get("type") != "message_new":
+            print("[DEBUG] Это не новое сообщение")
+            return {"status": "ok"}
+        
         if not all([
             msg,
             msg.get('peer_id'),
