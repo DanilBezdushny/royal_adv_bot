@@ -26,7 +26,7 @@ GROUPS: List[str] = [
     "https://vk.ru/club241519834", "https://vk.ru/club241781796", "https://vk.ru/club241187158",
     "https://vk.ru/maria_grechka", "https://vk.ru/feldberg.haos", "https://vk.ru/club242069966",
     "https://vk.ru/marinafinancelife", "https://vk.ru/club241309196", "https://vk.ru/krowka_lili",
-    "https://vk.ru/club242398054", "https://vk.ru/club236044126", "https://vk.ru/club242182095",
+    "https://vk.ru/club242398054", "https://vk.ru/club242182095",
     "https://vk.ru/abramov_daily", "https://vk.ru/club225748917", "https://vk.ru/club238235885",
     "https://vk.ru/club242418956",
 ]
@@ -45,7 +45,6 @@ WELCOME_TEXT: str = """🚪 ДОБРО ПОЖАЛОВАТЬ В ROYAL LOBBY!
 8. Саида Тихомирова — https://vk.ru/club241309196
 9. Ирина Остробокова — https://vk.ru/krowka_lili
 10. Алёна Андреева — https://vk.ru/club242398054
-11. Диана Каут — https://vk.ru/club236044126
 12. Elena Karjala — https://vk.ru/club242182095
 13. Marla Singer — https://vk.ru/club225748917
 14. Татьяна Крявкина - https://vk.ru/club242418956
