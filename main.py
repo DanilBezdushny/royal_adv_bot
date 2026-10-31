@@ -9,77 +9,34 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VK_TOKEN: str = os.getenv("VK_COMMUNITY_TOKEN", "")
-CONFIRM_TOKEN: str = os.getenv("CONFIRMATION_TOKEN", "")
-SECRET_KEY: str = os.getenv("SECRET_KEY", "")
-CHAT_PEER_ID: int = int(os.getenv("CHAT_PEER_ID", "0"))
+VK_TOKEN = os.getenv("VK_COMMUNITY_TOKEN", "")
+CONFIRM_TOKEN = os.getenv("CONFIRMATION_TOKEN", "")
+SECRET_KEY = os.getenv("SECRET_KEY", "")
+CHAT_PEER_ID = int(os.getenv("CHAT_PEER_ID", "0"))
 
-app: FastAPI = FastAPI()
-vk_session: VkApi = VkApi(token=VK_TOKEN)
+app = FastAPI()
+vk_session = VkApi(token=VK_TOKEN)
 
+# Глобальные хранилища данных
 member_names: Dict[int, str] = {}
 welcome_sent: Dict[int, bool] = {}
 last_check_time: Dict[int, int] = {}
 memory_lock = threading.Lock()
 
-from typing import overload, Any
-
-@overload
-def webhook(request: Request) -> Dict[Any, Any]: ...
-async def webhook(request: Request):
-    try: data = await request.json() 
-    # ... остальная логика обработки вебхука здесь 
-    except Exception as e: 
-        print(f"[ERROR] JSON parse error: {e}")
-        return {"error": "invalid json"}
-
 # Инициализируем переменную прямо после определения функции 
-webhook.last_update_id = -1
-
-GROUPS: List[str] = [
-    "https://vk.ru/club241519834", "https://vk.ru/club241781796", "https://vk.ru/club241187158",
-    "https://vk.ru/maria_grechka", "https://vk.ru/feldberg.haos", "https://vk.ru/club242069966",
-    "https://vk.ru/marinafinancelife", "https://vk.ru/club241309196", "https://vk.ru/krowka_lili",
-    "https://vk.ru/club242398054", "https://vk.ru/club242182095",
-    "https://vk.ru/abramov_daily", "https://vk.ru/club225748917", "https://vk.ru/club238235885",
-    "https://vk.ru/club242418956",
+GROUPS = [
+    # ... список групп здесь ...
 ]
 
-WELCOME_TEXT: str = """[id{uid}|{name}]🚪 ДОБРО ПОЖАЛОВАТЬ В ROYAL LOBBY!
-Вы попали в приёмную закрытого клуба взаимного продвижения Royal ADV. Сейчас в нашей команде только активные участники, которые ежедневно и честно продвигают друг друга в ВК.
-Чтобы получить пропуск в основное премиум-сообщество Royal ADV | Актив, вам необходимо выполнить главное условие клуба — оформить подписку на всех действующих резидентов.
-✅ Действующие участники:
-1. Александра Шлыкова — https://vk.ru/club241519834
-2. Мария Макарова — https://vk.ru/club241781796
-3. Инна Р — https://vk.ru/club241187158
-4. Мария Ивлева — https://vk.ru/maria_grechka
-5. Елизавета Фельдберг — https://vk.ru/feldberg.haos
-6. Ирина Кулочкина — https://vk.ru/club242069966
-7. Марина Нефёдова — https://vk.ru/marinafinancelife
-8. Саида Тихомирова — https://vk.ru/club241309196
-9. Ирина Остробокова — https://vk.ru/krowka_lili
-10. Алёна Андреева — https://vk.ru/club242398054
-12. Elena Karjala — https://vk.ru/club242182095
-13. Marla Singer — https://vk.ru/club225748917
-14. Татьяна Крявкина - https://vk.ru/club242418956
-15. Татьяна Воронцова - https://vk.ru/id200006469384
-16. Ирина Кузьмичева - https://vk.com/irina_chitaet
-17. Нина Юшкова - https://vk.ru/ninaural11
-18. Наталья Рахимовна - https://vk.ru/club242266727
-📝 Что делать после подписки?
-Как только вы подписались на все сообщества из списков выше — напишите в этот чат кодовое слово «ГОТОВО».
-После проверки подписок администратор или бот одобрит вашу заявку на вход в главный чат активности.
-🛡 Важно: Мы регулярно проверяем списки. Те, кто отпишется после входа в чат, будут забанены навсегда без права возврата!"""
-
-SUCCESS_TEXT: str = "[id{uid}|{name}], проверка пройдена! ✅ Ожидайте админа."
-FAIL_TEXT: str = "[id{uid}|{name}], проверка не пройдена. ❌ Вы не подписаны на:\n{groups}\n\nПодпишитесь и напишите «ГОТОВО» снова."
+WELCOME_TEXT = """... [твой текст приветствия] ..."""
+SUCCESS_TEXT = "[id{uid}|{name}], проверка пройдена! ✅ Ожидайте админа."
+FAIL_TEXT = "[id{uid}|{name}], проверка не пройдена. ❌ Вы не подписаны на:\n{groups}\n\nПодпишитесь и напишите «ГОТОВО» снова."
 
 def extract_group_id(url: str):
-    # Если в ссылке есть /club или /public, возвращаем всё после этого слова
-    if "/club" in url:
-        return url.split("club")[-1]   # Оставляем только цифры
-    elif "/public" in url:
-        return url.split("public")[-1] # Оставляем только цифры
+    if "/club" in url or "/public" in url:
+        return url.split("/")[-1].split("#")[0]
+    elif "/id" in url:
+        return url.split("/")[-1].split("#")[0]
     else:
         return None
 
@@ -87,7 +44,7 @@ def delete_message(peer_id: int, message_id: int) -> None:
     try:
         vk_session.method("messages.delete", {
             "message_ids": message_id,
-            "delete_for_all": 1  # Удаляет для всех участников чата
+            "delete_for_all": 1  
         })
     except Exception as e:
         print(f"[ERROR] Delete: {e}")
@@ -101,7 +58,7 @@ def send_message(peer_id: int, message: str) -> None:
 def get_user_name(user_id: int) -> str:
     try:
         response = vk_session.method("users.get", {"user_ids": user_id, "fields": "first_name,last_name"})
-        if response:
+        if response and isinstance(response, list) and len(response) > 0:
             user = response[0]
             name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
             return name if name else "Участник"
@@ -123,8 +80,8 @@ async def webhook(request: Request):
 
     if data.get("secret") != SECRET_KEY:
         return {"error": "invalid secret"}
-
-    # Сразу отвечаем ВК! Это критически важно для скорости.
+    
+    # Сразу отвечаем ВК!
     response = Response(content="ok", status_code=200)  
     
     async def process_request(data):  
@@ -151,38 +108,43 @@ async def webhook(request: Request):
             print("[DEBUG] Получен неполный объект сообщения. Игнорируем.")
             return  # Выходим из обработчика, ничего не делаем
 
-        if msg.get("peer_id") != CHAT_PEER_ID:
-            return {"status": "not our chat"}
-
         from_id = msg.get("from_id")
         text = msg.get("text", "").strip().lower()
         action = msg.get("action")
+        peer_id = msg.get("peer_id")
 
         # --- ПРИВЕТСТВИЕ ---
-        if action and action.get("type") == "chat_invite_user" and action.get("member_id") == from_id:
-            with memory_lock:
-                if not welcome_sent.get(from_id, False):
-                    welcome_sent[from_id] = True
-                    member_names[from_id] = get_user_name(from_id)
-                    send_message(CHAT_PEER_ID, WELCOME_TEXT.format(uid=from_id, name=name))
+        if action and action.get("type") == "chat_invite_user":
+            invited_id = action.get("member_id")
+            
+            # Приветствуем того, кого добавили, а не того, кто добавил
+            if invited_id:
+                with memory_lock:
+                    if not welcome_sent.get(invited_id, False):
+                        welcome_sent[invited_id] = True
+                        
+                        member_names[invited_id] = get_user_name(invited_id)
+                        name = member_names[invited_id]
+                        
+                        print(f"[INFO] Отправляем приветствие пользователю ID={invited_id}: {name}")
+                        send_message(CHAT_PEER_ID, WELCOME_TEXT.format(uid=invited_id, name=name))
             return {"status": "ok"}
 
         # --- ПРОВЕРКА ПОДПИСОК ---
-        elif text == "готово":
-            name = member_names.get(from_id, get_user_name(from_id))
+        elif text == "готово" and peer_id == CHAT_PEER_ID:
             current_time = int(time.time())
             
             with memory_lock:
                 last_time = last_check_time.get(from_id, 0)
             if current_time - last_time < 5:
+                print(f"[DEBUG] Слишком частая попытка проверки ({current_time-last_time}) сек., пропускаем.")
                 return {"status": "ok"}
             
             with memory_lock:
                 last_check_time[from_id] = current_time
 
-            # Мгновенно отвечаем пользователю
-            send_message(CHAT_PEER_ID, f"[id{from_id}|{name}], пожалуйста ожидайте, идёт проверка...")
-
+            name = member_names.get(from_id, get_user_name(from_id))
+            
             missing = []
             for url in GROUPS:
                 gid_str = extract_group_id(url)
@@ -192,8 +154,10 @@ async def webhook(request: Request):
                 try:
                     group_id_int = int(gid_str)
                     res = vk_session.method("groups.isMember", {"user_id": from_id, "group_id": group_id_int})
+                    
                     print(f"[DEBUG] Проверка {url} (ID: {group_id_int}) -> Ответ API: {res}")
                     
+                    # Обработка закрытых/недоступных групп
                     if isinstance(res, dict) and 'error' in res and res['error']['error_code'] == 203:
                         print(f"[DEBUG] Пропускаем закрытую группу {url}, считаем пользователя подписанным.")
                         continue
@@ -211,12 +175,11 @@ async def webhook(request: Request):
             else:
                 miss_text = "\n".join(missing[:5])
                 send_message(CHAT_PEER_ID, FAIL_TEXT.format(uid=from_id, name=name, groups=miss_text))
-
+                
     import asyncio
     asyncio.create_task(process_request(data))  # Запускаем долгую задачу параллельно
 
     return response # Быстро отвечаем ВК!
-    #return {"status": "ok"}  # Быстро отвечаем ВК!
 
 if __name__ == "__main__":
     import uvicorn
