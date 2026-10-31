@@ -22,8 +22,19 @@ welcome_sent: Dict[int, bool] = {}
 last_check_time: Dict[int, int] = {}
 memory_lock = threading.Lock()
 
-# Новая переменная для защиты от дублей (используем обычную глобальную) 
-last_update_id: int = -1
+from typing import overload, Any
+
+@overload
+def webhook(request: Request) -> Dict[Any, Any]: ...
+async def webhook(request: Request):
+    try: data = await request.json() 
+    # ... остальная логика обработки вебхука здесь 
+    except Exception as e: 
+        print(f"[ERROR] JSON parse error: {e}")
+        return {"error": "invalid json"}
+
+# Инициализируем переменную прямо после определения функции 
+webhook.last_update_id = -1
 
 GROUPS: List[str] = [
     "https://vk.ru/club241519834", "https://vk.ru/club241781796", "https://vk.ru/club241187158",
@@ -114,7 +125,7 @@ async def webhook(request: Request):
         return {"error": "invalid secret"}
 
     # Сразу отвечаем ВК! Это критически важно для скорости.
-    response = Response(content="ok", status_code=200)
+    response = Response(content="ok", status_code=200)  
     
     async def process_request(data):  
         with memory_lock:
@@ -125,7 +136,7 @@ async def webhook(request: Request):
             print("[DEBUG] Дубликат события")
             return
         if update_id is not None:
-            setattr(webhook, 'last_update_id', update_id)  # Запоминаем последний ID
+            setattr(webhook, 'last_update_id', update_id)
 
         msg = data.get("object").get("message", {})
         
@@ -163,8 +174,8 @@ async def webhook(request: Request):
             
             with memory_lock:
                 last_time = last_check_time.get(from_id, 0)
-            if current_time - last_time < 300:
-                return {"status": "ok"}  # Повторная проверка запрещена на 5 мин
+            if current_time - last_time < 5:
+                return {"status": "ok"}
             
             with memory_lock:
                 last_check_time[from_id] = current_time
@@ -204,7 +215,7 @@ async def webhook(request: Request):
     import asyncio
     asyncio.create_task(process_request(data))  # Запускаем долгую задачу параллельно
 
-    return response
+    return response # Быстро отвечаем ВК!
     #return {"status": "ok"}  # Быстро отвечаем ВК!
 
 if __name__ == "__main__":
