@@ -22,6 +22,8 @@ welcome_sent: Dict[int, bool] = {}
 last_check_time: Dict[int, int] = {}
 memory_lock = threading.Lock()
 
+webhook.last_update_id = -1 # <--- Вот сюда!
+
 from typing import overload, Any
 
 @overload
@@ -32,9 +34,6 @@ async def webhook(request: Request):
     except Exception as e: 
         print(f"[ERROR] JSON parse error: {e}")
         return {"error": "invalid json"}
-
-# Инициализируем переменную прямо после определения функции 
-webhook.last_update_id = -1
 
 GROUPS: List[str] = [
     "https://vk.ru/club241519834", "https://vk.ru/club241781796", "https://vk.ru/club241187158",
