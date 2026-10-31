@@ -165,8 +165,7 @@ async def webhook(request: Request):
                     welcome_sent[from_id] = True
                     member_names[from_id] = get_user_name(from_id)
                     send_message(CHAT_PEER_ID, f"[id{from_id}|{member_names[from_id]}], {WELCOME_TEXT}")
-            return response
-            #return {"status": "ok"}
+            return {"status": "ok"}
 
         # --- ПРОВЕРКА ПОДПИСОК ---
         elif text == "готово":
