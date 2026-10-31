@@ -9,23 +9,19 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# --- Настройки ---
 VK_TOKEN: str = os.getenv("VK_COMMUNITY_TOKEN", "")
 CONFIRM_TOKEN: str = os.getenv("CONFIRMATION_TOKEN", "")
 SECRET_KEY: str = os.getenv("SECRET_KEY", "")
 CHAT_PEER_ID: int = int(os.getenv("CHAT_PEER_ID", "0"))
 
-# --- Инициализация ---
 app: FastAPI = FastAPI()
 vk_session: VkApi = VkApi(token=VK_TOKEN)
 
-# --- Память бота (защищена блокировкой от дублей) ---
 member_names: Dict[int, str] = {}
 welcome_sent: Dict[int, bool] = {}
 last_check_time: Dict[int, int] = {}
 memory_lock = threading.Lock()
 
-# --- Список групп ---
 GROUPS: List[str] = [
     "https://vk.ru/club241519834", "https://vk.ru/club241781796", "https://vk.ru/club241187158",
     "https://vk.ru/maria_grechka", "https://vk.ru/feldberg.haos", "https://vk.ru/club242069966",
@@ -35,13 +31,9 @@ GROUPS: List[str] = [
     "https://vk.ru/club242418956",
 ]
 
-# --- Тексты сообщений ---
 WELCOME_TEXT: str = """🚪 ДОБРО ПОЖАЛОВАТЬ В ROYAL LOBBY!
-
 Вы попали в приёмную закрытого клуба взаимного продвижения Royal ADV. Сейчас в нашей команде только активные участники, которые ежедневно и честно продвигают друг друга в ВК.
-
 Чтобы получить пропуск в основное премиум-сообщество Royal ADV | Актив, вам необходимо выполнить главное условие клуба — оформить подписку на всех действующих резидентов.
-
 ✅ Действующие участники:
 1. Александра Шлыкова — https://vk.ru/club241519834
 2. Мария Макарова — https://vk.ru/club241781796
@@ -61,20 +53,13 @@ WELCOME_TEXT: str = """🚪 ДОБРО ПОЖАЛОВАТЬ В ROYAL LOBBY!
 16. Ирина Кузьмичева - https://vk.com/irina_chitaet
 17. Нина Юшкова - https://vk.ru/ninaural11
 18. Наталья Рахимовна - https://vk.ru/club242266727
-
 📝 Что делать после подписки?
-
 Как только вы подписались на все сообщества из списков выше — напишите в этот чат кодовое слово «ГОТОВО».
 После проверки подписок администратор или бот одобрит вашу заявку на вход в главный чат активности.
-
-🛡 Важно:
-
-Мы регулярно проверяем списки. Те, кто отпишется после входа в чат, будут забанены навсегда без права возврата!"""
+🛡 Важно: Мы регулярно проверяем списки. Те, кто отпишется после входа в чат, будут забанены навсегда без права возврата!"""
 
 SUCCESS_TEXT: str = "[id{uid}|{name}], проверка пройдена! ✅ Ожидайте админа."
 FAIL_TEXT: str = "[id{uid}|{name}], проверка не пройдена. ❌ Вы не подписаны на:\n{groups}\n\nПодпишитесь и напишите «ГОТОВО» снова."
-
-# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 
 def extract_group_id(url: str) -> Optional[str]:
     if "/club" in url or "/public" in url:
@@ -83,9 +68,7 @@ def extract_group_id(url: str) -> Optional[str]:
 
 def send_message(peer_id: int, message: str) -> None:
     try:
-        vk_session.method("messages.send", {
-            "peer_id": peer_id, "message": message, "random_id": get_random_id(), "dont_parse_links": 1
-        })
+        vk_session.method("messages.send", {"peer_id": peer_id, "message": message, "random_id": get_random_id(), "dont_parse_links": 1})
     except Exception as e:
         print(f"[ERROR] Send: {e}")
 
@@ -99,8 +82,6 @@ def get_user_name(user_id: int) -> str:
     except Exception:
         pass
     return "Участник"
-
-# --- МАРШРУТЫ FASTAPI ---
 
 @app.get("/")
 async def confirmation() -> Response:
@@ -128,24 +109,25 @@ async def webhook(request: Request) -> Dict:
         text: str = msg.get("text", "").strip().lower()
         action: Optional[Dict] = msg.get("action")
 
-        # --- 1. ПРИВЕТСТВИЕ (только при входе по ссылке) ---
+        # --- ПРИВЕТСТВИЕ ---
         if action and action.get("type") == "chat_invite_user" and action.get("member_id") == from_id:
+            print(f"[DEBUG] Событие входа для {from_id}")
             with memory_lock:
                 if not welcome_sent.get(from_id, False):
                     welcome_sent[from_id] = True
                     member_names[from_id] = get_user_name(from_id)
+                    print(f"[DEBUG] Отправка приветствия {from_id}")
                     send_message(CHAT_PEER_ID, f"[id{from_id}|{member_names[from_id]}], {WELCOME_TEXT}")
             return {"status": "ok"}
 
-        # --- 2. ПРОВЕРКА ПОДПИСОК (только чистое сообщение 'готово') ---
+        # --- ПРОВЕРКА ---
         if not action and text == "готово":
+            print(f"[DEBUG] Слово 'готово' от {from_id}")
             name: str = member_names.get(from_id, get_user_name(from_id))
             current_time: int = int(time.time())
 
-            # Защита от дублей через память
             with memory_lock:
                 last_time = last_check_time.get(from_id, 0)
-            
             if current_time - last_time < 5:
                 return {"status": "ok"}
 
@@ -153,20 +135,22 @@ async def webhook(request: Request) -> Dict:
                 last_check_time[from_id] = current_time
 
             missing: List[str] = []
+            print(f"[DEBUG] --- НАЧАЛО ПРОВЕРКИ {from_id} ---")
             for url in GROUPS:
                 gid_str = extract_group_id(url)
                 if not gid_str:
                     continue
-                
-                # *** КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ *** 
-                # ID группы для API должен быть ОТРИЦАТЕЛЬНЫМ
                 try:
                     group_id_int = -int(gid_str)
                     res = vk_session.method("groups.isMember", {"user_id": from_id, "group_id": group_id_int})
+                    print(f"[DEBUG] Проверка {url} (ID: {group_id_int}) -> Ответ API: {res}")
                     if res not in [1, 2]:
                         missing.append(url)
-                except Exception:
+                except Exception as e:
+                    print(f"[DEBUG] Ошибка API для {url}: {e}")
                     missing.append(url)
+            
+            print(f"[DEBUG] --- РЕЗУЛЬТАТ: не хватает {missing} ---")
 
             if not missing:
                 send_message(CHAT_PEER_ID, SUCCESS_TEXT.format(uid=from_id, name=name))
@@ -176,10 +160,6 @@ async def webhook(request: Request) -> Dict:
 
     return {"status": "ok"}
 
-# --- ЗАПУСК (БЕЗ RELOAD, чтобы не было дублей) ---
 if __name__ == "__main__":
     import uvicorn
-    # ВАЖНО: reload=False. 
-    # Если вам нужно менять код на лету, используйте 'run.py' как я писал выше. 
-    # В одном файле reload всегда будет создавать дубли.
     uvicorn.run(app, host="0.0.0.0", port=3000, reload=False, workers=1)
