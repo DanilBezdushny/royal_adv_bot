@@ -117,14 +117,15 @@ async def webhook(request: Request):
     response = Response(content="ok", status_code=200)
     
     async def process_request(data):  
-        global last_update_id  # Используем глобальную переменную (объявлена в начале файла!)
+        with memory_lock:
+            last_update_id = getattr(webhook, 'last_update_id', -1)
         
         update_id = data.get('update_id')
         if update_id is not None and update_id == last_update_id:
             print("[DEBUG] Дубликат события")
             return
         if update_id is not None:
-            last_update_id = update_id  # Сохраняем ID в глобальной памяти
+            setattr(webhook, 'last_update_id', update_id)  # Запоминаем последний ID
 
         msg = data.get("object").get("message", {})
         
@@ -178,7 +179,7 @@ async def webhook(request: Request):
                     continue
                 
                 try:
-                    group_id_int = int(gid_str)  # Оставляем ID положительным!
+                    group_id_int = int(gid_str)
                     res = vk_session.method("groups.isMember", {"user_id": from_id, "group_id": group_id_int})
                     print(f"[DEBUG] Проверка {url} (ID: {group_id_int}) -> Ответ API: {res}")
                     
