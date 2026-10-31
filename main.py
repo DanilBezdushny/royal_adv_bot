@@ -159,13 +159,14 @@ async def webhook(request: Request):
         action = msg.get("action")
 
         # --- ПРИВЕТСТВИЕ ---
-        if action and action.get("type") == "chat_invite_user" and action.get("member_id") == from_id:
+        if action and action.get("type") in ["chat_invite_user", "chat_invite_user_by_link"]:
             with memory_lock:
                 if not welcome_sent.get(from_id, False):
                     welcome_sent[from_id] = True
                     member_names[from_id] = get_user_name(from_id)
                     send_message(CHAT_PEER_ID, f"[id{from_id}|{member_names[from_id]}], {WELCOME_TEXT}")
-            return {"status": "ok"}
+            return response
+            #return {"status": "ok"}
 
         # --- ПРОВЕРКА ПОДПИСОК ---
         elif text == "готово":
