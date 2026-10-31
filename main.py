@@ -22,6 +22,20 @@ welcome_sent: Dict[int, bool] = {}
 last_check_time: Dict[int, int] = {}
 memory_lock = threading.Lock()
 
+from typing import overload, Any
+
+@overload
+def webhook(request: Request) -> Dict[Any, Any]: ...
+async def webhook(request: Request):
+    try: data = await request.json() 
+    # ... остальная логика обработки вебхука здесь 
+    except Exception as e: 
+        print(f"[ERROR] JSON parse error: {e}")
+        return {"error": "invalid json"}
+
+# Инициализируем переменную прямо после определения функции 
+webhook.last_update_id = -1
+
 GROUPS: List[str] = [
     "https://vk.ru/club241519834", "https://vk.ru/club241781796", "https://vk.ru/club241187158",
     "https://vk.ru/maria_grechka", "https://vk.ru/feldberg.haos", "https://vk.ru/club242069966",
@@ -110,10 +124,10 @@ async def webhook(request: Request):
     if data.get("secret") != SECRET_KEY:
         return {"error": "invalid secret"}
 
-    # Сразу отвечаем ВК — это критически важно для скорости!
+    # Сразу отвечаем ВК, чтобы он не ждал!
     response = Response(content="ok", status_code=200)
     
-    async def process_request(data):  # Передаём data внутрь
+    async def process_request(data):  
         with memory_lock:
             last_update_id = getattr(webhook, 'last_update_id', -1)
         
@@ -122,7 +136,7 @@ async def webhook(request: Request):
             print("[DEBUG] Дубликат события")
             return
         if update_id is not None:
-            setattr(webhook, 'last_update_id', update_id)
+            setattr(webhook, 'last_update_id', update_id)  # Запоминаем последний ID
 
         msg = data.get("object").get("message", {})
         
@@ -130,9 +144,9 @@ async def webhook(request: Request):
         if not all([
             msg,
             msg.get('peer_id'),
-            msg.get('from_id'),
+            msg.get('from_id'), 
             msg.get('text'), 
-            msg.get('id') is not None   # Важно для сообщений с id = 0
+            msg.get('id') is not None
         ]):
             print("[DEBUG] Получен неполный объект сообщения. Игнорируем.")
             return  # Выходим из обработчика, ничего не делаем
@@ -166,7 +180,7 @@ async def webhook(request: Request):
             with memory_lock:
                 last_check_time[from_id] = current_time
 
-            # Мгновенно отвечаем пользователю (без ожидания проверки подписок!)
+            # Мгновенно отвечаем пользователю
             send_message(CHAT_PEER_ID, f"[id{from_id}|{name}], пожалуйста ожидайте, идёт проверка...")
 
             missing = []
@@ -176,7 +190,7 @@ async def webhook(request: Request):
                     continue
                 
                 try:
-                    group_id_int = int(gid_str)  # Оставляем ID положительным!
+                    group_id_int = int(gid_str)
                     res = vk_session.method("groups.isMember", {"user_id": from_id, "group_id": group_id_int})
                     print(f"[DEBUG] Проверка {url} (ID: {group_id_int}) -> Ответ API: {res}")
                     
