@@ -121,11 +121,11 @@ async def webhook(request: Request):
         if update_id is not None:
             setattr(webhook, 'last_update_id', update_id)
 
-        msg = data.get("object", {}).get("message", {})
+        # *** ПРАВИЛЬНОЕ ПОЛУЧЕНИЕ СООБЩЕНИЯ ***
+        msg = data.get("object").get("message")
         
-        # *** КРИТИЧЕСКАЯ ПРОВЕРКА ***
-        # Проверяем наличие обязательных полей: peer_id, from_id, text, id
-        if not all([msg.get('peer_id'), msg.get('from_id'), msg.get('text'), msg.get('id')]):
+        # *** КРИТИЧЕСКАЯ ПРОВЕРКА СТРУКТУРЫ ***
+        if not all([msg, msg.get('peer_id'), msg.get('from_id'), msg.get('text'), msg.get('id')]):
             print("[DEBUG] Получен неполный объект сообщения. Игнорируем.")
             return  # Выходим из обработчика, ничего не делаем
 
@@ -198,7 +198,7 @@ async def webhook(request: Request):
     import asyncio
     asyncio.create_task(process_request())  # Запускаем долгую задачу параллельно
 
-    return {"status": "ok"}  # <-- ВНИМАНИЕ! Вот эта строка решает проблему!
+    return {"status": "ok"}  # Быстро отвечаем ВК!
 
 if __name__ == "__main__":
     import uvicorn
