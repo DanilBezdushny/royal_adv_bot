@@ -22,18 +22,8 @@ welcome_sent: Dict[int, bool] = {}
 last_check_time: Dict[int, int] = {}
 memory_lock = threading.Lock()
 
-webhook.last_update_id = -1 # <--- Вот сюда!
-
-from typing import overload, Any
-
-@overload
-def webhook(request: Request) -> Dict[Any, Any]: ...
-async def webhook(request: Request):
-    try: data = await request.json() 
-    # ... остальная логика обработки вебхука здесь 
-    except Exception as e: 
-        print(f"[ERROR] JSON parse error: {e}")
-        return {"error": "invalid json"}
+# Новая переменная для защиты от дублей (используем обычную глобальную) 
+last_update_id: int = -1
 
 GROUPS: List[str] = [
     "https://vk.ru/club241519834", "https://vk.ru/club241781796", "https://vk.ru/club241187158",
@@ -124,18 +114,17 @@ async def webhook(request: Request):
         return {"error": "invalid secret"}
 
     # Сразу отвечаем ВК! Это критически важно для скорости.
-    response = Response(content="ok", status_code=200)  
+    response = Response(content="ok", status_code=200)
     
     async def process_request(data):  
-        with memory_lock:
-            last_update_id = getattr(webhook, 'last_update_id', -1)
+        global last_update_id  # Используем глобальную переменную (объявлена в начале файла!)
         
         update_id = data.get('update_id')
         if update_id is not None and update_id == last_update_id:
             print("[DEBUG] Дубликат события")
             return
         if update_id is not None:
-            setattr(webhook, 'last_update_id', update_id)
+            last_update_id = update_id  # Сохраняем ID в глобальной памяти
 
         msg = data.get("object").get("message", {})
         
@@ -189,7 +178,7 @@ async def webhook(request: Request):
                     continue
                 
                 try:
-                    group_id_int = int(gid_str)
+                    group_id_int = int(gid_str)  # Оставляем ID положительным!
                     res = vk_session.method("groups.isMember", {"user_id": from_id, "group_id": group_id_int})
                     print(f"[DEBUG] Проверка {url} (ID: {group_id_int}) -> Ответ API: {res}")
                     
@@ -214,7 +203,7 @@ async def webhook(request: Request):
     import asyncio
     asyncio.create_task(process_request(data))  # Запускаем долгую задачу параллельно
 
-    return response # Быстро отвечаем ВК!
+    return response
     #return {"status": "ok"}  # Быстро отвечаем ВК!
 
 if __name__ == "__main__":
