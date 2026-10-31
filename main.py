@@ -117,14 +117,17 @@ async def confirmation() -> Response:
 async def webhook(request: Request):
     try:
         data = await request.json()
+        
+        # Полный вывод объекта данных (для отладки)
+        print(f"\n[DEBUG] ПОЛУЧЕННЫЙ ОБЪЕКТ DATA:\n{data}\n")
+    
     except Exception as e:
         print(f"[ERROR] JSON parse error: {e}")
         return {"error": "invalid json"}
 
     if data.get("secret") != SECRET_KEY:
         return {"error": "invalid secret"}
-
-    # Сразу отвечаем ВК! Это критически важно для скорости.
+    
     response = Response(content="ok", status_code=200)  
     
     async def process_request(data):  
@@ -138,30 +141,28 @@ async def webhook(request: Request):
         if update_id is not None:
             setattr(webhook, 'last_update_id', update_id)
 
+        # Объявляем все нужные переменные сразу
         msg = data.get("object").get("message", {})
+        action = msg.get("action")
+        peer_id = msg.get("peer_id")
+        from_id = msg.get("from_id")
         
         # *** КРИТИЧЕСКАЯ ПРОВЕРКА ***
+        # Проверяем только то, что точно нужно для работы бота
         if not all([
-            msg,
-            msg.get('peer_id'),
-            msg.get('from_id'), 
-            msg.get('id') is not None   # Важно для сообщений с id = 0
+            peer_id,
+            from_id,
         ]):
             print("[DEBUG] Получен неполный объект сообщения. Игнорируем.")
             return  # Выходим из обработчика, ничего не делаем
 
-        if msg.get("peer_id") != CHAT_PEER_ID:
-            return {"status": "not our chat"}
-
-        from_id = msg.get("from_id")
         text = msg.get("text", "").strip().lower()
-        action = msg.get("action")
 
         # --- ПРИВЕТСТВИЕ ---
-        invited_id = action.get("member_id")
+        invited_id = action.get("member_id") if action else None
         
         # Приветствуем того, кого добавили, если это наш чат
-        if invited_id is not None and peer_id == CHAT_PEER_ID: # pyright: ignore[reportUndefinedVariable]
+        if invited_id is not None and peer_id == CHAT_PEER_ID:
             with memory_lock:
                 if not welcome_sent.get(invited_id, False):
                     welcome_sent[invited_id] = True
@@ -174,8 +175,7 @@ async def webhook(request: Request):
             return {"status": "ok"}
 
         # --- ПРОВЕРКА ПОДПИСОК ---
-        elif text == "готово":
-            name = member_names.get(from_id, get_user_name(from_id))
+        elif text == "готово" and peer_id == CHAT_PEER_ID:
             current_time = int(time.time())
             
             with memory_lock:
@@ -186,9 +186,8 @@ async def webhook(request: Request):
             with memory_lock:
                 last_check_time[from_id] = current_time
 
-            # Мгновенно отвечаем пользователю
-            send_message(CHAT_PEER_ID, f"[id{from_id}|{name}], пожалуйста ожидайте, идёт проверка...")
-
+            name = member_names.get(from_id, get_user_name(from_id))
+            
             missing = []
             for url in GROUPS:
                 gid_str = extract_group_id(url)
