@@ -24,7 +24,6 @@ memory_lock = threading.Lock()
 
 # Инициализируем переменную прямо после определения функции 
 
-
 GROUPS = [
     # ... список групп здесь ...
 ]
@@ -75,6 +74,10 @@ async def confirmation() -> Response:
 async def webhook(request: Request):
     try:
         data = await request.json()
+        
+        # Полный вывод объекта данных (для отладки)
+        print(f"\n[DEBUG] ПОЛУЧЕННЫЙ ОБЪЕКТ DATA:\n{data}\n")
+    
     except Exception as e:
         print(f"[ERROR] JSON parse error: {e}")
         return {"error": "invalid json"}
@@ -98,22 +101,10 @@ async def webhook(request: Request):
 
         msg = data.get("object").get("message", {})
         
-        # *** КРИТИЧЕСКАЯ ПРОВЕРКА ***
-        if not all([
-            msg,
-            msg.get('peer_id'),
-            msg.get('from_id'), 
-            msg.get('text'), 
-            msg.get('id') is not None   # Важно для сообщений с id = 0
-        ]):
-            print("[DEBUG] Получен неполный объект сообщения. Игнорируем.")
-            return  # Выходим из обработчика, ничего не делаем
-
-        from_id = msg.get("from_id")
-        text = msg.get("text", "").strip().lower()
-        action = msg.get("action")
-        peer_id = msg.get("peer_id")
-
+        action = data.get("object", {}).get("action")
+        peer_id = data.get("object", {}).get("peer_id")
+        from_id = data.get("object", {}).get("from_id")
+        
         # --- ПРИВЕТСТВИЕ ---
         if action and action.get("type") == "chat_invite_user":
             invited_id = action.get("member_id")
@@ -130,53 +121,6 @@ async def webhook(request: Request):
                         print(f"[INFO] Отправляем приветствие пользователю ID={invited_id}: {name}")
                         send_message(CHAT_PEER_ID, WELCOME_TEXT.format(uid=invited_id, name=name))
             return {"status": "ok"}
-
-        # --- ПРОВЕРКА ПОДПИСОК ---
-        elif text == "готово" and peer_id == CHAT_PEER_ID:
-            current_time = int(time.time())
-            
-            with memory_lock:
-                last_time = last_check_time.get(from_id, 0)
-            if current_time - last_time < 5:
-                print(f"[DEBUG] Слишком частая попытка проверки ({current_time-last_time}) сек., пропускаем.")
-                return {"status": "ok"}
-            
-            with memory_lock:
-                last_check_time[from_id] = current_time
-
-            name = member_names.get(from_id, get_user_name(from_id))
-            
-            missing = []
-            for url in GROUPS:
-                gid_str = extract_group_id(url)
-                if not gid_str:
-                    continue
-                
-                try:
-                    group_id_int = int(gid_str)
-                    res = vk_session.method("groups.isMember", {"user_id": from_id, "group_id": group_id_int})
-                    
-                    print(f"[DEBUG] Проверка {url} (ID: {group_id_int}) -> Ответ API: {res}")
-                    
-                    # Обработка закрытых/недоступных групп
-                    if isinstance(res, dict) and 'error' in res and res['error']['error_code'] == 203:
-                        print(f"[DEBUG] Пропускаем закрытую группу {url}, считаем пользователя подписанным.")
-                        continue
-                        
-                    if res not in [1, 2]:
-                        missing.append(url)
-                except Exception as e:
-                    print(f"[DEBUG] Ошибка API для {url}: {e}")
-                    missing.append(url)
-            
-            print(f"[DEBUG] --- РЕЗУЛЬТАТ: Бот считает, что не хватает: {missing} ---")
-
-            if not missing:
-                send_message(CHAT_PEER_ID, SUCCESS_TEXT.format(uid=from_id, name=name))
-            else:
-                miss_text = "\n".join(missing[:5])
-                send_message(CHAT_PEER_ID, FAIL_TEXT.format(uid=from_id, name=name, groups=miss_text))
-
     import asyncio
     asyncio.create_task(process_request(data))  # Запускаем долгую задачу параллельно
 
