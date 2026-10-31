@@ -69,6 +69,15 @@ def extract_group_id(url: str):
     else:
         return None
 
+def delete_message(peer_id: int, message_id: int) -> None:
+    try:
+        vk_session.method("messages.delete", {
+            "message_ids": message_id,
+            "delete_for_all": 1  # Удаляет для всех участников чата
+        })
+    except Exception as e:
+        print(f"[ERROR] Delete: {e}")
+
 def send_message(peer_id: int, message: str) -> None:
     try:
         vk_session.method("messages.send", {"peer_id": peer_id, "message": message, "random_id": get_random_id(), "dont_parse_links": 1})
@@ -124,38 +133,47 @@ async def webhook(request: Request) -> Dict:
             return {"status": "ok"}
 
         # --- ПРОВЕРКА ---
-        if text == "готово":
-            print(f"[DEBUG] Слово 'готово' от {from_id}")
-            name: str = member_names.get(from_id, get_user_name(from_id))
-            current_time: int = int(time.time())
-
+        if text == "готово" and not action:
+            name = member_names.get(from_id, get_user_name(from_id))
+            current_time = int(time.time())
+            
             with memory_lock:
                 last_time = last_check_time.get(from_id, 0)
             if current_time - last_time < 5:
                 return {"status": "ok"}
-
+            
             with memory_lock:
                 last_check_time[from_id] = current_time
 
-            missing: List[str] = []
-            print(f"[DEBUG] --- НАЧАЛО ПРОВЕРКИ {from_id} ({name}) ---")
+            # Мгновенно отвечаем пользователю
+            send_message(CHAT_PEER_ID, f"[id{from_id}|{name}], пожалуйста ожидайте, идёт проверка...")
+
+            # Убираем команду пользователя из общего чата
+            msg_id = msg.get('id')
+            if msg_id is not None:
+                delete_message(CHAT_PEER_ID, msg_id)
+
+            missing = []
             for url in GROUPS:
                 gid_str = extract_group_id(url)
                 if not gid_str:
                     continue
+                
                 try:
-                    # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: убираем минус перед ID
-                    group_id_int = int(gid_str) 
+                    group_id_int = int(gid_str)
                     res = vk_session.method("groups.isMember", {"user_id": from_id, "group_id": group_id_int})
                     print(f"[DEBUG] Проверка {url} (ID: {group_id_int}) -> Ответ API: {res}")
+                    
+                    if isinstance(res, dict) and 'error' in res and res['error']['error_code'] == 203:
+                        print(f"[DEBUG] Пропускаем закрытую группу {url}, считаем пользователя подписанным.")
+                        continue
+                        
                     if res not in [1, 2]:
                         missing.append(url)
                 except Exception as e:
                     print(f"[DEBUG] Ошибка API для {url}: {e}")
                     missing.append(url)
             
-            print(f"[DEBUG] --- РЕЗУЛЬТАТ: Бот считает, что не хватает: {missing} ---")
-
             if not missing:
                 send_message(CHAT_PEER_ID, SUCCESS_TEXT.format(uid=from_id, name=name))
             else:
