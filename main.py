@@ -124,7 +124,7 @@ async def webhook(request: Request):
     if data.get("secret") != SECRET_KEY:
         return {"error": "invalid secret"}
 
-    # Сразу отвечаем ВК, чтобы он не ждал!
+    # Сразу отвечаем ВК! Это критически важно для скорости.
     response = Response(content="ok", status_code=200)
     
     async def process_request(data):  
@@ -136,7 +136,7 @@ async def webhook(request: Request):
             print("[DEBUG] Дубликат события")
             return
         if update_id is not None:
-            setattr(webhook, 'last_update_id', update_id)  # Запоминаем последний ID
+            setattr(webhook, 'last_update_id', update_id)
 
         msg = data.get("object").get("message", {})
         
@@ -146,7 +146,7 @@ async def webhook(request: Request):
             msg.get('peer_id'),
             msg.get('from_id'), 
             msg.get('text'), 
-            msg.get('id') is not None
+            msg.get('id') is not None   # Важно для сообщений с id = 0
         ]):
             print("[DEBUG] Получен неполный объект сообщения. Игнорируем.")
             return  # Выходим из обработчика, ничего не делаем
@@ -190,7 +190,7 @@ async def webhook(request: Request):
                     continue
                 
                 try:
-                    group_id_int = int(gid_str)
+                    group_id_int = int(gid_str)  # Оставляем ID положительным!
                     res = vk_session.method("groups.isMember", {"user_id": from_id, "group_id": group_id_int})
                     print(f"[DEBUG] Проверка {url} (ID: {group_id_int}) -> Ответ API: {res}")
                     
