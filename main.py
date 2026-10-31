@@ -100,96 +100,105 @@ async def confirmation() -> Response:
     return Response(content=CONFIRM_TOKEN, media_type="text/plain", status_code=200)
 
 @app.post("/")
-async def webhook(request: Request) -> Dict:
+async def webhook(request: Request):
     try:
         data = await request.json()
-    except Exception:
+    except Exception as e:
+        print(f"[ERROR] JSON parse error: {e}")
         return {"error": "invalid json"}
 
     if data.get("secret") != SECRET_KEY:
         return {"error": "invalid secret"}
 
-    if data.get("type") == "confirmation":
-        return Response(content=CONFIRM_TOKEN, media_type="text/plain", status_code=200)
+    async def process_request():
+        with memory_lock:
+            last_update_id = getattr(webhook, 'last_update_id', -1)
+        
+        update_id = data.get('update_id')
+        if update_id is not None and update_id == last_update_id:
+            print("[DEBUG] Дубликат события")
+            return
+        if update_id is not None:
+            setattr(webhook, 'last_update_id', update_id)
 
-    if data.get("type") == "message_new":
         msg = data.get("object", {}).get("message", {})
-    
-    # Для диагностики выводим ВСЁ содержимое сообщения
-    print(f"[DEBUG] Полный объект сообщения: {msg}")
-    
-    # *** КРИТИЧЕСКАЯ ПРОВЕРКА ***
-    if not all([msg.get('peer_id'), msg.get('from_id'), msg.get('text'), msg.get('id')]):
-        print("[DEBUG] Получен неполный объект сообщения. Игнорируем.")
-        return  # Выходим из обработчика, ничего не делаем
-
-    if msg.get("peer_id") != CHAT_PEER_ID:
-        return {"status": "not our chat"}
-
-    from_id = msg.get("from_id")
-    text = msg.get("text", "").strip().lower()
-    action = msg.get("action")
-
-    # --- ПРИВЕТСТВИЕ ---
-    if action and action.get("type") == "chat_invite_user" and action.get("member_id") == from_id:
-        with memory_lock:
-            if not welcome_sent.get(from_id, False):
-                welcome_sent[from_id] = True
-                member_names[from_id] = get_user_name(from_id)
-                send_message(CHAT_PEER_ID, f"[id{from_id}|{member_names[from_id]}], {WELCOME_TEXT}")
-        return {"status": "ok"}
-
-    # --- ПРОВЕРКА ПОДПИСОК ---
-    elif text == "готово" and not action:
-        name = member_names.get(from_id, get_user_name(from_id))
-        current_time = int(time.time())
         
-        with memory_lock:
-            last_time = last_check_time.get(from_id, 0)
-        if current_time - last_time < 5:
+        # *** КРИТИЧЕСКАЯ ПРОВЕРКА ***
+        # Проверяем наличие обязательных полей: peer_id, from_id, text, id
+        if not all([msg.get('peer_id'), msg.get('from_id'), msg.get('text'), msg.get('id')]):
+            print("[DEBUG] Получен неполный объект сообщения. Игнорируем.")
+            return  # Выходим из обработчика, ничего не делаем
+
+        if msg.get("peer_id") != CHAT_PEER_ID:
+            return {"status": "not our chat"}
+
+        from_id = msg.get("from_id")
+        text = msg.get("text", "").strip().lower()
+        action = msg.get("action")
+
+        # --- ПРИВЕТСТВИЕ ---
+        if action and action.get("type") == "chat_invite_user" and action.get("member_id") == from_id:
+            with memory_lock:
+                if not welcome_sent.get(from_id, False):
+                    welcome_sent[from_id] = True
+                    member_names[from_id] = get_user_name(from_id)
+                    send_message(CHAT_PEER_ID, f"[id{from_id}|{member_names[from_id]}], {WELCOME_TEXT}")
             return {"status": "ok"}
-        
-        with memory_lock:
-            last_check_time[from_id] = current_time
 
-        # Мгновенно отвечаем пользователю
-        send_message(CHAT_PEER_ID, f"[id{from_id}|{name}], пожалуйста ожидайте, идёт проверка...")
-
-        # Убираем команду пользователя из общего чата
-        msg_id = msg.get('id')
-        if msg_id is not None:
-            delete_message(CHAT_PEER_ID, msg_id)
-
-        missing = []
-        for url in GROUPS:
-            gid_str = extract_group_id(url)
-            if not gid_str:
-                continue
+        # --- ПРОВЕРКА ПОДПИСОК ---
+        elif text == "готово":
+            name = member_names.get(from_id, get_user_name(from_id))
+            current_time = int(time.time())
             
-            try:
-                group_id_int = int(gid_str)
-                res = vk_session.method("groups.isMember", {"user_id": from_id, "group_id": group_id_int})
-                print(f"[DEBUG] Проверка {url} (ID: {group_id_int}) -> Ответ API: {res}")
-                
-                if isinstance(res, dict) and 'error' in res and res['error']['error_code'] == 203:
-                    print(f"[DEBUG] Пропускаем закрытую группу {url}, считаем пользователя подписанным.")
+            with memory_lock:
+                last_time = last_check_time.get(from_id, 0)
+            if current_time - last_time < 5:
+                return {"status": "ok"}
+            
+            with memory_lock:
+                last_check_time[from_id] = current_time
+
+            # Мгновенно отвечаем пользователю
+            send_message(CHAT_PEER_ID, f"[id{from_id}|{name}], пожалуйста ожидайте, идёт проверка...")
+
+            # Убираем команду пользователя из общего чата
+            msg_id = msg.get('id')
+            if msg_id is not None:
+                delete_message(CHAT_PEER_ID, msg_id)
+
+            missing = []
+            for url in GROUPS:
+                gid_str = extract_group_id(url)
+                if not gid_str:
                     continue
+                
+                try:
+                    group_id_int = int(gid_str)
+                    res = vk_session.method("groups.isMember", {"user_id": from_id, "group_id": group_id_int})
+                    print(f"[DEBUG] Проверка {url} (ID: {group_id_int}) -> Ответ API: {res}")
                     
-                if res not in [1, 2]:
+                    if isinstance(res, dict) and 'error' in res and res['error']['error_code'] == 203:
+                        print(f"[DEBUG] Пропускаем закрытую группу {url}, считаем пользователя подписанным.")
+                        continue
+                        
+                    if res not in [1, 2]:
+                        missing.append(url)
+                except Exception as e:
+                    print(f"[DEBUG] Ошибка API для {url}: {e}")
                     missing.append(url)
-            except Exception as e:
-                print(f"[DEBUG] Ошибка API для {url}: {e}")
-                missing.append(url)
-        
-        print(f"[DEBUG] --- РЕЗУЛЬТАТ: Бот считает, что не хватает: {missing} ---")
+            
+            print(f"[DEBUG] --- РЕЗУЛЬТАТ: Бот считает, что не хватает: {missing} ---")
 
-        if not missing:
-            send_message(CHAT_PEER_ID, SUCCESS_TEXT.format(uid=from_id, name=name))
-        else:
-            miss_text = "\n".join(missing[:5])
-            send_message(CHAT_PEER_ID, FAIL_TEXT.format(uid=from_id, name=name, groups=miss_text))
+            if not missing:
+                send_message(CHAT_PEER_ID, SUCCESS_TEXT.format(uid=from_id, name=name))
+            else:
+                miss_text = "\n".join(missing[:5])
+                send_message(CHAT_PEER_ID, FAIL_TEXT.format(uid=from_id, name=name, groups=miss_text))
 
-    return {"status": "ok"}
+    import asyncio
+    asyncio.create_task(process_request())  # Запускаем долгую задачу параллельно
+
+    return {"status": "ok"}  # <-- ВНИМАНИЕ! Вот эта строка решает проблему!
 
 if __name__ == "__main__":
     import uvicorn
