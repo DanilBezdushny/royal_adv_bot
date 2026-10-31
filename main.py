@@ -1,7 +1,6 @@
 from fastapi import FastAPI, Request, Response
 import os
 import time
-import json
 import threading
 from typing import Optional, Dict, List
 from vk_api import VkApi
@@ -10,21 +9,23 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# --- Настройки ---
 VK_TOKEN: str = os.getenv("VK_COMMUNITY_TOKEN", "")
 CONFIRM_TOKEN: str = os.getenv("CONFIRMATION_TOKEN", "")
 SECRET_KEY: str = os.getenv("SECRET_KEY", "")
 CHAT_PEER_ID: int = int(os.getenv("CHAT_PEER_ID", "0"))
 
+# --- Инициализация ---
 app: FastAPI = FastAPI()
 vk_session: VkApi = VkApi(token=VK_TOKEN)
 
-LOCK_FILE = "check_lock.json"
-lock = threading.Lock() # Потокобезопасная блокировка
-
+# --- Память бота (защищена блокировкой от дублей) ---
 member_names: Dict[int, str] = {}
 welcome_sent: Dict[int, bool] = {}
 last_check_time: Dict[int, int] = {}
+memory_lock = threading.Lock()
 
+# --- Список групп ---
 GROUPS: List[str] = [
     "https://vk.ru/club241519834", "https://vk.ru/club241781796", "https://vk.ru/club241187158",
     "https://vk.ru/maria_grechka", "https://vk.ru/feldberg.haos", "https://vk.ru/club242069966",
@@ -34,6 +35,7 @@ GROUPS: List[str] = [
     "https://vk.ru/club242418956",
 ]
 
+# --- Тексты сообщений ---
 WELCOME_TEXT: str = """🚪 ДОБРО ПОЖАЛОВАТЬ В ROYAL LOBBY!
 
 Вы попали в приёмную закрытого клуба взаимного продвижения Royal ADV. Сейчас в нашей команде только активные участники, которые ежедневно и честно продвигают друг друга в ВК.
@@ -72,6 +74,8 @@ WELCOME_TEXT: str = """🚪 ДОБРО ПОЖАЛОВАТЬ В ROYAL LOBBY!
 SUCCESS_TEXT: str = "[id{uid}|{name}], проверка пройдена! ✅ Ожидайте админа."
 FAIL_TEXT: str = "[id{uid}|{name}], проверка не пройдена. ❌ Вы не подписаны на:\n{groups}\n\nПодпишитесь и напишите «ГОТОВО» снова."
 
+# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+
 def extract_group_id(url: str) -> Optional[str]:
     if "/club" in url or "/public" in url:
         return url.split("/")[-1]
@@ -95,6 +99,8 @@ def get_user_name(user_id: int) -> str:
     except Exception:
         pass
     return "Участник"
+
+# --- МАРШРУТЫ FASTAPI ---
 
 @app.get("/")
 async def confirmation() -> Response:
@@ -122,34 +128,38 @@ async def webhook(request: Request) -> Dict:
         text: str = msg.get("text", "").strip().lower()
         action: Optional[Dict] = msg.get("action")
 
-        # ПРИВЕТСТВИЕ
+        # --- 1. ПРИВЕТСТВИЕ (только при входе по ссылке) ---
         if action and action.get("type") == "chat_invite_user" and action.get("member_id") == from_id:
-            if not welcome_sent.get(from_id, False):
-                welcome_sent[from_id] = True
-                member_names[from_id] = get_user_name(from_id)
-                send_message(CHAT_PEER_ID, f"[id{from_id}|{member_names[from_id]}], {WELCOME_TEXT}")
+            with memory_lock:
+                if not welcome_sent.get(from_id, False):
+                    welcome_sent[from_id] = True
+                    member_names[from_id] = get_user_name(from_id)
+                    send_message(CHAT_PEER_ID, f"[id{from_id}|{member_names[from_id]}], {WELCOME_TEXT}")
             return {"status": "ok"}
 
-        # ПРОВЕРКА
+        # --- 2. ПРОВЕРКА ПОДПИСОК (только чистое сообщение 'готово') ---
         if not action and text == "готово":
-            # Потокобезопасная проверка дублей
-            with lock:
+            name: str = member_names.get(from_id, get_user_name(from_id))
+            current_time: int = int(time.time())
+
+            # Защита от дублей через память
+            with memory_lock:
                 last_time = last_check_time.get(from_id, 0)
             
-            current_time = int(time.time())
             if current_time - last_time < 5:
                 return {"status": "ok"}
 
-            with lock:
+            with memory_lock:
                 last_check_time[from_id] = current_time
 
-            name: str = member_names.get(from_id, get_user_name(from_id))
             missing: List[str] = []
-
             for url in GROUPS:
                 gid_str = extract_group_id(url)
                 if not gid_str:
                     continue
+                
+                # *** КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ *** 
+                # ID группы для API должен быть ОТРИЦАТЕЛЬНЫМ
                 try:
                     group_id_int = -int(gid_str)
                     res = vk_session.method("groups.isMember", {"user_id": from_id, "group_id": group_id_int})
@@ -165,3 +175,11 @@ async def webhook(request: Request) -> Dict:
                 send_message(CHAT_PEER_ID, FAIL_TEXT.format(uid=from_id, name=name, groups=miss_text))
 
     return {"status": "ok"}
+
+# --- ЗАПУСК (БЕЗ RELOAD, чтобы не было дублей) ---
+if __name__ == "__main__":
+    import uvicorn
+    # ВАЖНО: reload=False. 
+    # Если вам нужно менять код на лету, используйте 'run.py' как я писал выше. 
+    # В одном файле reload всегда будет создавать дубли.
+    uvicorn.run(app, host="0.0.0.0", port=3000, reload=False, workers=1)
