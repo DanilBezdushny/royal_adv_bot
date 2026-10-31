@@ -2,6 +2,7 @@ from fastapi import FastAPI, Request, Response
 import os
 import time
 import json
+import threading
 from typing import Optional, Dict, List
 from vk_api import VkApi
 from vk_api.utils import get_random_id
@@ -17,44 +18,13 @@ CHAT_PEER_ID: int = int(os.getenv("CHAT_PEER_ID", "0"))
 app: FastAPI = FastAPI()
 vk_session: VkApi = VkApi(token=VK_TOKEN)
 
-# --- ФАЙЛ-БЛОКИРОВКА ДЛЯ ЗАЩИТЫ ОТ ДУБЛЕЙ ---
 LOCK_FILE = "check_lock.json"
+lock = threading.Lock() # Потокобезопасная блокировка
 
-def acquire_lock(user_id: int) -> bool:
-    """Пытается поставить замок на проверку пользователя"""
-    try:
-        if os.path.exists(LOCK_FILE):
-            with open(LOCK_FILE, "r") as f:
-                locks = json.load(f)
-        else:
-            locks = {}
-        
-        # Если замок есть и он свежий (моложе 10 секунд) — не пускаем
-        if str(user_id) in locks and (time.time() - locks[str(user_id)]["time"] < 10):
-            return False
-        
-        # Ставим новый замок
-        locks[str(user_id)] = {"time": time.time()}
-        with open(LOCK_FILE, "w") as f:
-            json.dump(locks, f)
-        return True
-    except Exception:
-        return False
+member_names: Dict[int, str] = {}
+welcome_sent: Dict[int, bool] = {}
+last_check_time: Dict[int, int] = {}
 
-def release_lock(user_id: int):
-    """Снимает замок"""
-    try:
-        if os.path.exists(LOCK_FILE):
-            with open(LOCK_FILE, "r") as f:
-                locks = json.load(f)
-            if str(user_id) in locks:
-                del locks[str(user_id)]
-            with open(LOCK_FILE, "w") as f:
-                json.dump(locks, f)
-    except Exception:
-        pass
-
-# --- КОНСТАНТЫ ---
 GROUPS: List[str] = [
     "https://vk.ru/club241519834", "https://vk.ru/club241781796", "https://vk.ru/club241187158",
     "https://vk.ru/maria_grechka", "https://vk.ru/feldberg.haos", "https://vk.ru/club242069966",
@@ -63,10 +33,6 @@ GROUPS: List[str] = [
     "https://vk.ru/abramov_daily", "https://vk.ru/club225748917", "https://vk.ru/club238235885",
     "https://vk.ru/club242418956",
 ]
-
-member_names: Dict[int, str] = {}
-welcome_sent: Dict[int, bool] = {}
-last_check_time: Dict[int, int] = {}
 
 WELCOME_TEXT: str = """🚪 ДОБРО ПОЖАЛОВАТЬ В ROYAL LOBBY!
 
@@ -106,8 +72,6 @@ WELCOME_TEXT: str = """🚪 ДОБРО ПОЖАЛОВАТЬ В ROYAL LOBBY!
 SUCCESS_TEXT: str = "[id{uid}|{name}], проверка пройдена! ✅ Ожидайте админа."
 FAIL_TEXT: str = "[id{uid}|{name}], проверка не пройдена. ❌ Вы не подписаны на:\n{groups}\n\nПодпишитесь и напишите «ГОТОВО» снова."
 
-# --- ФУНКЦИИ ---
-
 def extract_group_id(url: str) -> Optional[str]:
     if "/club" in url or "/public" in url:
         return url.split("/")[-1]
@@ -131,8 +95,6 @@ def get_user_name(user_id: int) -> str:
     except Exception:
         pass
     return "Участник"
-
-# --- МАРШРУТЫ ---
 
 @app.get("/")
 async def confirmation() -> Response:
@@ -168,62 +130,38 @@ async def webhook(request: Request) -> Dict:
                 send_message(CHAT_PEER_ID, f"[id{from_id}|{member_names[from_id]}], {WELCOME_TEXT}")
             return {"status": "ok"}
 
-        # ПРОВЕРКА ПОДПИСОК
+        # ПРОВЕРКА
         if not action and text == "готово":
-            # Защита от дублей через файл
-            if not acquire_lock(from_id):
-                print(f"[DEBUG] Duplicate check blocked for {from_id}")
-                return {"status": "duplicate"}
+            # Потокобезопасная проверка дублей
+            with lock:
+                last_time = last_check_time.get(from_id, 0)
             
-            try:
-                name: str = member_names.get(from_id, get_user_name(from_id))
-                current_time: int = int(time.time())
+            current_time = int(time.time())
+            if current_time - last_time < 5:
+                return {"status": "ok"}
 
-                if (current_time - last_check_time.get(from_id, 0)) < 5:
-                    return {"status": "ok"}
-                
+            with lock:
                 last_check_time[from_id] = current_time
 
-                missing: List[str] = []
-                
-                # --- ДИАГНОСТИКА (смотрите в консоль!) ---
-                print(f"[DEBUG] --- START CHECK FOR USER {from_id} ({name}) ---")
+            name: str = member_names.get(from_id, get_user_name(from_id))
+            missing: List[str] = []
 
-                for url in GROUPS:
-                    gid_str = extract_group_id(url)
-                    if not gid_str:
-                        continue
-                    
-                    try:
-                        group_id_int = -int(gid_str)
-                        # Здесь происходит магия. Смотрим ответ API:
-                        res = vk_session.method("groups.isMember", {"user_id": from_id, "group_id": group_id_int})
-                        print(f"[DEBUG] Checking {url} (ID: {group_id_int}) -> API Response: {res}")
-                        
-                        if res not in [1, 2]:
-                            missing.append(url)
-                    except ValueError:
-                        print(f"[DEBUG] ERROR: Invalid group ID format for {url}")
+            for url in GROUPS:
+                gid_str = extract_group_id(url)
+                if not gid_str:
+                    continue
+                try:
+                    group_id_int = -int(gid_str)
+                    res = vk_session.method("groups.isMember", {"user_id": from_id, "group_id": group_id_int})
+                    if res not in [1, 2]:
                         missing.append(url)
-                    except Exception as e:
-                        print(f"[DEBUG] API ERROR for {url}: {e}")
-                        missing.append(url)
+                except Exception:
+                    missing.append(url)
 
-                print(f"[DEBUG] --- MISSING GROUPS: {missing} ---")
-
-                if not missing:
-                    send_message(CHAT_PEER_ID, SUCCESS_TEXT.format(uid=from_id, name=name))
-                else:
-                    miss_text = "\n".join(missing[:5])
-                    send_message(CHAT_PEER_ID, FAIL_TEXT.format(uid=from_id, name=name, groups=miss_text))
-
-            finally:
-                # Обязательно снимаем замок через 2 секунды (на случай лагов)
-                time.sleep(2)
-                release_lock(from_id)
+            if not missing:
+                send_message(CHAT_PEER_ID, SUCCESS_TEXT.format(uid=from_id, name=name))
+            else:
+                miss_text = "\n".join(missing[:5])
+                send_message(CHAT_PEER_ID, FAIL_TEXT.format(uid=from_id, name=name, groups=miss_text))
 
     return {"status": "ok"}
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=3000, reload=True) # reload может быть причиной дублей
