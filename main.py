@@ -6,15 +6,14 @@ from vk_api import VkApi
 from vk_api.utils import get_random_id
 from dotenv import load_dotenv
 
-# --- Загрузка переменных окружения ---
 load_dotenv()
 
+# --- Настройки ---
 VK_TOKEN: str = os.getenv("VK_COMMUNITY_TOKEN", "")
 CONFIRM_TOKEN: str = os.getenv("CONFIRMATION_TOKEN", "")
 SECRET_KEY: str = os.getenv("SECRET_KEY", "")
 CHAT_PEER_ID: int = int(os.getenv("CHAT_PEER_ID", "0"))
 
-# --- Инициализация ---
 app: FastAPI = FastAPI()
 vk_session: VkApi = VkApi(token=VK_TOKEN)
 
@@ -28,12 +27,12 @@ GROUPS: List[str] = [
     "https://vk.ru/club242418956",
 ]
 
-# --- Память бота (время жизни — пока запущен скрипт) ---
+# --- Память бота ---
 member_names: Dict[int, str] = {}
 welcome_sent: Dict[int, bool] = {}
 last_check_time: Dict[int, int] = {}
 
-# --- ТЕКСТЫ СООБЩЕНИЙ (вынесены отдельно для красоты и удобства) ---
+# --- Тексты ---
 WELCOME_TEXT: str = """🚪 ДОБРО ПОЖАЛОВАТЬ В ROYAL LOBBY!
 
 Вы попали в приёмную закрытого клуба взаимного продвижения Royal ADV. Сейчас в нашей команде только активные участники, которые ежедневно и честно продвигают друг друга в ВК.
@@ -72,38 +71,33 @@ WELCOME_TEXT: str = """🚪 ДОБРО ПОЖАЛОВАТЬ В ROYAL LOBBY!
 SUCCESS_TEXT: str = "[id{uid}|{name}], проверка пройдена! ✅ Ожидайте админа."
 FAIL_TEXT: str = "[id{uid}|{name}], проверка не пройдена. ❌ Вы не подписаны на:\n{groups}\n\nПодпишитесь и напишите «ГОТОВО» снова."
 
-# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+# --- ФУНКЦИИ ---
 
 def extract_group_id(url: str) -> Optional[str]:
-    """Извлекает ID группы из ссылки (club123 или public123)"""
     if "/club" in url or "/public" in url:
         return url.split("/")[-1]
     return None
 
 def send_message(peer_id: int, message: str) -> None:
-    """Безопасная отправка сообщения в ВК"""
     try:
         vk_session.method("messages.send", {
-            "peer_id": peer_id,
-            "message": message,
-            "random_id": get_random_id(),
-            "dont_parse_links": 1
+            "peer_id": peer_id, "message": message, "random_id": get_random_id(), "dont_parse_links": 1
         })
     except Exception as e:
-        print(f"[ERROR] Не удалось отправить сообщение: {e}")
+        print(f"[ERROR] Send: {e}")
 
 def get_user_name(user_id: int) -> str:
-    """Получает имя пользователя, защищено от ошибок приватности"""
     try:
         response = vk_session.method("users.get", {"user_ids": user_id, "fields": "first_name,last_name"})
         if response:
             user = response[0]
-            return f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
+            name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
+            return name if name else "Участник"
     except Exception:
         pass
     return "Участник"
 
-# --- МАРШРУТЫ FASTAPI ---
+# --- МАРШРУТЫ ---
 
 @app.get("/")
 async def confirmation() -> Response:
@@ -111,10 +105,23 @@ async def confirmation() -> Response:
 
 @app.post("/")
 async def webhook(request: Request) -> Dict:
+    # --- ЗАЩИТА ОТ ДУБЛЕЙ (Требование 3) ---
+    # Сохраняем ID последнего обработанного события. 
+    # Если придет тот же ID снова (дубликат от VK) — игнорируем его.
+    if not hasattr(webhook, "last_update_id"):
+        webhook.last_update_id = -1
+    
     try:
         data = await request.json()
     except Exception:
         return {"error": "invalid json"}
+
+    # Проверка на дубликат обновления
+    update_id = data.get("update_id") or data.get("ts")  # VK может присылать ts
+    if update_id is not None and update_id == getattr(webhook, "last_update_id", -1):
+        return {"status": "duplicate ignored"}
+    if update_id is not None:
+        webhook.last_update_id = update_id
 
     if data.get("secret") != SECRET_KEY:
         return {"error": "invalid secret"}
@@ -124,7 +131,6 @@ async def webhook(request: Request) -> Dict:
 
     if data.get("type") == "message_new":
         msg = data.get("object", {}).get("message", {})
-        
         if msg.get("peer_id") != CHAT_PEER_ID:
             return {"status": "not our chat"}
 
@@ -132,21 +138,22 @@ async def webhook(request: Request) -> Dict:
         text: str = msg.get("text", "").strip().lower()
         action: Optional[Dict] = msg.get("action")
 
-        # --- 1. ПРИВЕТСТВИЕ НОВИЧКОВ (только по ссылке/приглашению) ---
+        # --- 1. ПРИВЕТСТВИЕ (Требование 1) ---
+        # Сначала сохраняем имя, потом шлем текст
         if action and action.get("type") == "chat_invite_user" and action.get("member_id") == from_id:
             if not welcome_sent.get(from_id, False):
                 welcome_sent[from_id] = True
                 member_names[from_id] = get_user_name(from_id)
                 
+                # Теперь имя точно есть в словаре
                 send_message(CHAT_PEER_ID, f"[id{from_id}|{member_names[from_id]}], {WELCOME_TEXT}")
             return {"status": "ok"}
 
-        # --- 2. ПРОВЕРКА ПОДПИСОК (только чистое сообщение 'готово') ---
+        # --- 2. ПРОВЕРКА ПОДПИСОК (Требование 2) ---
         if not action and text == "готово":
             name: str = member_names.get(from_id, get_user_name(from_id))
             current_time: int = int(time.time())
 
-            # Антиспам
             if (current_time - last_check_time.get(from_id, 0)) < 5:
                 return {"status": "ok"}
             
@@ -154,21 +161,24 @@ async def webhook(request: Request) -> Dict:
 
             missing: List[str] = []
             for url in GROUPS:
-                gid = extract_group_id(url)
-                if not gid:
+                gid_str = extract_group_id(url)
+                if not gid_str:
                     continue
+                
+                # *** ГЛАВНОЕ ИСПРАВЛЕНИЕ *** 
+                # Добавляем минус для ID группы. Без него API всегда возвращает "не подписан".
                 try:
-                    res = vk_session.method("groups.isMember", {"user_id": from_id, "group_id": gid})
+                    group_id_int = -int(gid_str)
+                    res = vk_session.method("groups.isMember", {"user_id": from_id, "group_id": group_id_int})
                     if res not in [1, 2]:
                         missing.append(url)
-                except Exception:
+                except (ValueError, Exception):
                     missing.append(url)
             
-            # --- МГНОВЕННАЯ ОТПРАВКА РЕЗУЛЬТАТА ---
             if not missing:
                 send_message(CHAT_PEER_ID, SUCCESS_TEXT.format(uid=from_id, name=name))
             else:
-                miss_text = "\n".join(missing[:5])  # Показываем только первые 5, чтобы не было спама
+                miss_text = "\n".join(missing[:5])
                 send_message(CHAT_PEER_ID, FAIL_TEXT.format(uid=from_id, name=name, groups=miss_text))
 
     return {"status": "ok"}
