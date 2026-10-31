@@ -14,16 +14,17 @@ CONFIRM_TOKEN = os.getenv("CONFIRMATION_TOKEN", "")
 SECRET_KEY = os.getenv("SECRET_KEY", "")
 CHAT_PEER_ID = int(os.getenv("CHAT_PEER_ID", "0"))
 
-app = FastAPI()
+app: FastAPI = FastAPI()
 vk_session = VkApi(token=VK_TOKEN)
 
-# Глобальные хранилища данных
 member_names: Dict[int, str] = {}
 welcome_sent: Dict[int, bool] = {}
 last_check_time: Dict[int, int] = {}
 memory_lock = threading.Lock()
 
 # Инициализируем переменную прямо после определения функции 
+
+
 GROUPS = [
     # ... список групп здесь ...
 ]
@@ -117,12 +118,12 @@ async def webhook(request: Request):
         if action and action.get("type") == "chat_invite_user":
             invited_id = action.get("member_id")
             
-            # Приветствуем того, кого добавили, а не того, кто добавил
-            if invited_id:
+            # Приветствуем того, кого добавили, если это наш чат
+            if invited_id is not None and peer_id == CHAT_PEER_ID:
                 with memory_lock:
                     if not welcome_sent.get(invited_id, False):
                         welcome_sent[invited_id] = True
-                        
+
                         member_names[invited_id] = get_user_name(invited_id)
                         name = member_names[invited_id]
                         
@@ -175,7 +176,7 @@ async def webhook(request: Request):
             else:
                 miss_text = "\n".join(missing[:5])
                 send_message(CHAT_PEER_ID, FAIL_TEXT.format(uid=from_id, name=name, groups=miss_text))
-                
+
     import asyncio
     asyncio.create_task(process_request(data))  # Запускаем долгую задачу параллельно
 
