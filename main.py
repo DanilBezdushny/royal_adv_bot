@@ -115,11 +115,13 @@ async def webhook(request: Request) -> Dict:
     if data.get("type") == "message_new":
         msg = data.get("object", {}).get("message", {})
     
+    # Для диагностики выводим ВСЁ содержимое сообщения
+    print(f"[DEBUG] Полный объект сообщения: {msg}")
+    
     # *** КРИТИЧЕСКАЯ ПРОВЕРКА ***
-    # Проверяем наличие обязательных полей: peer_id, from_id, text, id
     if not all([msg.get('peer_id'), msg.get('from_id'), msg.get('text'), msg.get('id')]):
         print("[DEBUG] Получен неполный объект сообщения. Игнорируем.")
-        return {"status": "ok"}
+        return  # Выходим из обработчика, ничего не делаем
 
     if msg.get("peer_id") != CHAT_PEER_ID:
         return {"status": "not our chat"}
