@@ -122,9 +122,12 @@ async def webhook(request: Request):
             setattr(webhook, 'last_update_id', update_id)
 
         # *** ПРАВИЛЬНОЕ ПОЛУЧЕНИЕ СООБЩЕНИЯ ***
-        msg = data.get("object").get("message")
+            msg = data.get("object", {}).get("message", {})
         
-        # *** КРИТИЧЕСКАЯ ПРОВЕРКА СТРУКТУРЫ ***
+        # Для диагностики выводим ВСЁ содержимое сообщения
+        print(f"[DEBUG] Полный объект сообщения: {data}")
+        
+        # *** КРИТИЧЕСКАЯ ПРОВЕРКА ***
         if not all([msg, msg.get('peer_id'), msg.get('from_id'), msg.get('text'), msg.get('id')]):
             print("[DEBUG] Получен неполный объект сообщения. Игнорируем.")
             return  # Выходим из обработчика, ничего не делаем
