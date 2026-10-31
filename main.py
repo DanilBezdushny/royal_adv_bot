@@ -130,7 +130,14 @@ async def webhook(request: Request):
         print(f"[DEBUG] Полный объект сообщения: {data}")
         
         # *** КРИТИЧЕСКАЯ ПРОВЕРКА ***
-        if not all([msg, msg.get('peer_id'), msg.get('from_id'), msg.get('text'), msg.get('id')]):
+                # *** КРИТИЧЕСКАЯ ПРОВЕРКА ***
+        if not all([
+            msg,
+            msg.get('peer_id'),
+            msg.get('from_id'),
+            msg.get('text'),
+            msg.get('id', None)   # <--- Вот эта строчка решает проблему!
+        ]):
             print("[DEBUG] Получен неполный объект сообщения. Игнорируем.")
             return  # Выходим из обработчика, ничего не делаем
 
