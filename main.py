@@ -125,7 +125,7 @@ async def webhook(request: Request):
         return {"error": "invalid secret"}
 
     # Сразу отвечаем ВК! Это критически важно для скорости.
-    response = Response(content="ok", status_code=200)
+    response = Response(content="ok", status_code=200)  
     
     async def process_request(data):  
         with memory_lock:
@@ -190,7 +190,7 @@ async def webhook(request: Request):
                     continue
                 
                 try:
-                    group_id_int = int(gid_str)  # Оставляем ID положительным!
+                    group_id_int = int(gid_str)
                     res = vk_session.method("groups.isMember", {"user_id": from_id, "group_id": group_id_int})
                     print(f"[DEBUG] Проверка {url} (ID: {group_id_int}) -> Ответ API: {res}")
                     
@@ -215,7 +215,8 @@ async def webhook(request: Request):
     import asyncio
     asyncio.create_task(process_request(data))  # Запускаем долгую задачу параллельно
 
-    return {"status": "ok"}  # Быстро отвечаем ВК!
+    return response # Быстро отвечаем ВК!
+    #return {"status": "ok"}  # Быстро отвечаем ВК!
 
 if __name__ == "__main__":
     import uvicorn
