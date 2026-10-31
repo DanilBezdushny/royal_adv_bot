@@ -110,7 +110,10 @@ async def webhook(request: Request):
     if data.get("secret") != SECRET_KEY:
         return {"error": "invalid secret"}
 
-    async def process_request():
+    # Сразу отвечаем ВК, чтобы он не ждал! Это критически важно для скорости.
+    response = Response(content="ok", status_code=200)
+    
+    async def process_request(data):  # <--- Передаём data сюда!
         with memory_lock:
             last_update_id = getattr(webhook, 'last_update_id', -1)
         
@@ -121,8 +124,7 @@ async def webhook(request: Request):
         if update_id is not None:
             setattr(webhook, 'last_update_id', update_id)
 
-        # *** ПРАВИЛЬНОЕ ПОЛУЧЕНИЕ СООБЩЕНИЯ ***
-            msg = data.get("object", {}).get("message", {})
+        msg = data.get("object").get("message", {})
         
         # Для диагностики выводим ВСЁ содержимое сообщения
         print(f"[DEBUG] Полный объект сообщения: {data}")
@@ -199,7 +201,7 @@ async def webhook(request: Request):
                 send_message(CHAT_PEER_ID, FAIL_TEXT.format(uid=from_id, name=name, groups=miss_text))
 
     import asyncio
-    asyncio.create_task(process_request())  # Запускаем долгую задачу параллельно
+    asyncio.create_task(process_request(data))  # <-- Обязательно передай data!
 
     return {"status": "ok"}  # Быстро отвечаем ВК!
 
