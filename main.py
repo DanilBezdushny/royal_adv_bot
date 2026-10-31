@@ -114,71 +114,78 @@ async def webhook(request: Request) -> Dict:
 
     if data.get("type") == "message_new":
         msg = data.get("object", {}).get("message", {})
-        if msg.get("peer_id") != CHAT_PEER_ID:
-            return {"status": "not our chat"}
+    
+    # *** КРИТИЧЕСКАЯ ПРОВЕРКА ***
+    # Проверяем наличие обязательных полей: peer_id, from_id, text, id
+    if not all([msg.get('peer_id'), msg.get('from_id'), msg.get('text'), msg.get('id')]):
+        print("[DEBUG] Получен неполный объект сообщения. Игнорируем.")
+        return {"status": "ok"}
 
-        from_id: int = msg.get("from_id")
-        text: str = msg.get("text", "").strip().lower()
-        action: Optional[Dict] = msg.get("action")
+    if msg.get("peer_id") != CHAT_PEER_ID:
+        return {"status": "not our chat"}
 
-        # --- ПРИВЕТСТВИЕ ---
-        if action and action.get("type") == "chat_invite_user" and action.get("member_id") == from_id:
-            print(f"[DEBUG] Событие входа для {from_id}")
-            with memory_lock:
-                if not welcome_sent.get(from_id, False):
-                    welcome_sent[from_id] = True
-                    member_names[from_id] = get_user_name(from_id)
-                    print(f"[DEBUG] Отправка приветствия {from_id}")
-                    send_message(CHAT_PEER_ID, f"[id{from_id}|{member_names[from_id]}], {WELCOME_TEXT}")
+    from_id = msg.get("from_id")
+    text = msg.get("text", "").strip().lower()
+    action = msg.get("action")
+
+    # --- ПРИВЕТСТВИЕ ---
+    if action and action.get("type") == "chat_invite_user" and action.get("member_id") == from_id:
+        with memory_lock:
+            if not welcome_sent.get(from_id, False):
+                welcome_sent[from_id] = True
+                member_names[from_id] = get_user_name(from_id)
+                send_message(CHAT_PEER_ID, f"[id{from_id}|{member_names[from_id]}], {WELCOME_TEXT}")
+        return {"status": "ok"}
+
+    # --- ПРОВЕРКА ПОДПИСОК ---
+    elif text == "готово" and not action:
+        name = member_names.get(from_id, get_user_name(from_id))
+        current_time = int(time.time())
+        
+        with memory_lock:
+            last_time = last_check_time.get(from_id, 0)
+        if current_time - last_time < 5:
             return {"status": "ok"}
+        
+        with memory_lock:
+            last_check_time[from_id] = current_time
 
-        # --- ПРОВЕРКА ---
-        if text == "готово" and not action:
-            name = member_names.get(from_id, get_user_name(from_id))
-            current_time = int(time.time())
+        # Мгновенно отвечаем пользователю
+        send_message(CHAT_PEER_ID, f"[id{from_id}|{name}], пожалуйста ожидайте, идёт проверка...")
+
+        # Убираем команду пользователя из общего чата
+        msg_id = msg.get('id')
+        if msg_id is not None:
+            delete_message(CHAT_PEER_ID, msg_id)
+
+        missing = []
+        for url in GROUPS:
+            gid_str = extract_group_id(url)
+            if not gid_str:
+                continue
             
-            with memory_lock:
-                last_time = last_check_time.get(from_id, 0)
-            if current_time - last_time < 5:
-                return {"status": "ok"}
-            
-            with memory_lock:
-                last_check_time[from_id] = current_time
-
-            # Мгновенно отвечаем пользователю
-            send_message(CHAT_PEER_ID, f"[id{from_id}|{name}], пожалуйста ожидайте, идёт проверка...")
-
-            # Убираем команду пользователя из общего чата
-            msg_id = msg.get('id')
-            if msg_id is not None:
-                delete_message(CHAT_PEER_ID, msg_id)
-
-            missing = []
-            for url in GROUPS:
-                gid_str = extract_group_id(url)
-                if not gid_str:
-                    continue
+            try:
+                group_id_int = int(gid_str)
+                res = vk_session.method("groups.isMember", {"user_id": from_id, "group_id": group_id_int})
+                print(f"[DEBUG] Проверка {url} (ID: {group_id_int}) -> Ответ API: {res}")
                 
-                try:
-                    group_id_int = int(gid_str)
-                    res = vk_session.method("groups.isMember", {"user_id": from_id, "group_id": group_id_int})
-                    print(f"[DEBUG] Проверка {url} (ID: {group_id_int}) -> Ответ API: {res}")
+                if isinstance(res, dict) and 'error' in res and res['error']['error_code'] == 203:
+                    print(f"[DEBUG] Пропускаем закрытую группу {url}, считаем пользователя подписанным.")
+                    continue
                     
-                    if isinstance(res, dict) and 'error' in res and res['error']['error_code'] == 203:
-                        print(f"[DEBUG] Пропускаем закрытую группу {url}, считаем пользователя подписанным.")
-                        continue
-                        
-                    if res not in [1, 2]:
-                        missing.append(url)
-                except Exception as e:
-                    print(f"[DEBUG] Ошибка API для {url}: {e}")
+                if res not in [1, 2]:
                     missing.append(url)
-            
-            if not missing:
-                send_message(CHAT_PEER_ID, SUCCESS_TEXT.format(uid=from_id, name=name))
-            else:
-                miss_text = "\n".join(missing[:5])
-                send_message(CHAT_PEER_ID, FAIL_TEXT.format(uid=from_id, name=name, groups=miss_text))
+            except Exception as e:
+                print(f"[DEBUG] Ошибка API для {url}: {e}")
+                missing.append(url)
+        
+        print(f"[DEBUG] --- РЕЗУЛЬТАТ: Бот считает, что не хватает: {missing} ---")
+
+        if not missing:
+            send_message(CHAT_PEER_ID, SUCCESS_TEXT.format(uid=from_id, name=name))
+        else:
+            miss_text = "\n".join(missing[:5])
+            send_message(CHAT_PEER_ID, FAIL_TEXT.format(uid=from_id, name=name, groups=miss_text))
 
     return {"status": "ok"}
 
