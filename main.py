@@ -111,7 +111,7 @@ def get_user_name(user_id: int) -> str:
 
 @app.get("/")
 async def confirmation() -> Response:
-    return Response(content="ok", media_type="text/plain", status_code=200)
+    return Response(content=CONFIRM_TOKEN, media_type="text/plain", status_code=200)
 
 @app.post("/")
 async def webhook(request: Request):
@@ -127,40 +127,29 @@ async def webhook(request: Request):
     # Сразу отвечаем ВК! Это критически важно для скорости.
     response = Response(content="ok", status_code=200)  
     
-async def process_request(data):
-    with memory_lock:
-        # ... ваш существующий код по update_id ...
-        
-        msg = data.get("object").get("message", {})
-        action = msg.get("action")
-        
-        # --- ПРИВЕТСТВИЕ ---
-    if (
-        action and 
-        action.get("type") in ["chat_invite_user", "chat_invite_user_by_link"] and
-        msg.get("peer_id") == CHAT_PEER_ID  
-    ):
-        from_id = msg.get("from_id")
+    async def process_request(data):  
         with memory_lock:
-            if not welcome_sent.get(from_id, False):
-                welcome_sent[from_id] = True
-                member_names[from_id] = get_user_name(from_id)
-                send_message(CHAT_PEER_ID, f"[id{from_id}|{member_names[from_id]}], {WELCOME_TEXT}")
-        return Response(content="ok", media_type="text/plain", status_code=200)  # <--- ИСПРАВЛЕНИЕ ЗДЕСЬ!
+            last_update_id = getattr(webhook, 'last_update_id', -1)
+        
+        update_id = data.get('update_id')
+        if update_id is not None and update_id == last_update_id:
+            print("[DEBUG] Дубликат события")
+            return
+        if update_id is not None:
+            setattr(webhook, 'last_update_id', update_id)
 
+        msg = data.get("object").get("message", {})
+        
         # *** КРИТИЧЕСКАЯ ПРОВЕРКА ***
-        # Оставляем её без изменений!
         if not all([
             msg,
             msg.get('peer_id'),
             msg.get('from_id'), 
-            msg.get('text'),             # Только текстовые сообщения проходят дальше
+            msg.get('text'), 
             msg.get('id') is not None   # Важно для сообщений с id = 0
         ]):
             print("[DEBUG] Получен неполный объект сообщения. Игнорируем.")
             return  # Выходим из обработчика, ничего не делаем
-
-        # Остальная ваша логика: проверка слова "готово" и т.д.
 
         if msg.get("peer_id") != CHAT_PEER_ID:
             return {"status": "not our chat"}
@@ -170,13 +159,13 @@ async def process_request(data):
         action = msg.get("action")
 
         # --- ПРИВЕТСТВИЕ ---
-        if action and action.get("type") in ["chat_invite_user", "chat_invite_user_by_link"]:
+        if action and action.get("type") == "chat_invite_user" and action.get("member_id") == from_id:
             with memory_lock:
                 if not welcome_sent.get(from_id, False):
                     welcome_sent[from_id] = True
                     member_names[from_id] = get_user_name(from_id)
                     send_message(CHAT_PEER_ID, f"[id{from_id}|{member_names[from_id]}], {WELCOME_TEXT}")
-            return Response(content="ok", media_type="text/plain", status_code=200)  # Если хотите использовать уже созданный объект ответа
+            return {"status": "ok"}
 
         # --- ПРОВЕРКА ПОДПИСОК ---
         elif text == "готово":
@@ -186,7 +175,7 @@ async def process_request(data):
             with memory_lock:
                 last_time = last_check_time.get(from_id, 0)
             if current_time - last_time < 5:
-               return Response(content="ok", media_type="text/plain", status_code=200)  # Если хотите использовать уже созданный объект ответа
+                return {"status": "ok"}
             
             with memory_lock:
                 last_check_time[from_id] = current_time
@@ -226,7 +215,7 @@ async def process_request(data):
     import asyncio
     asyncio.create_task(process_request(data))  # Запускаем долгую задачу параллельно
 
-    return Response(content="ok", media_type="text/plain", status_code=200) # Быстро отвечаем ВК!
+    return response # Быстро отвечаем ВК!
     #return {"status": "ok"}  # Быстро отвечаем ВК!
 
 if __name__ == "__main__":
