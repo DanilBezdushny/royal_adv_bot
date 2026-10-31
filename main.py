@@ -21,15 +21,15 @@ member_names: Dict[int, str] = {}
 welcome_sent: Dict[int, bool] = {}
 last_check_time: Dict[int, int] = {}
 memory_lock = threading.Lock()
-processed_updates = {}  # Хранение истории событий для защиты от дублей
-MAX_HISTORY = 50
 
+# Новая переменная для защиты от дублей (используем обычную глобальную) 
+last_update_id: int = -1
 
 GROUPS: List[str] = [
     "https://vk.ru/club241519834", "https://vk.ru/club241781796", "https://vk.ru/club241187158",
     "https://vk.ru/maria_grechka", "https://vk.ru/feldberg.haos", "https://vk.ru/club242069966",
     "https://vk.ru/marinafinancelife", "https://vk.ru/club241309196", "https://vk.ru/krowka_lili",
-    "https://vk.ru/club242398954", "https://vk.ru/club242182095",
+    "https://vk.ru/club242398054", "https://vk.ru/club242182095",
     "https://vk.ru/abramov_daily", "https://vk.ru/club225748917", "https://vk.ru/club238235885",
     "https://vk.ru/club242418956",
 ]
@@ -47,7 +47,7 @@ WELCOME_TEXT: str = """🚪 ДОБРО ПОЖАЛОВАТЬ В ROYAL LOBBY!
 7. Марина Нефёдова — https://vk.ru/marinafinancelife
 8. Саида Тихомирова — https://vk.ru/club241309196
 9. Ирина Остробокова — https://vk.ru/krowka_lili
-10. Алёна Андреева — https://vk.ru/club242398954
+10. Алёна Андреева — https://vk.ru/club242398054
 12. Elena Karjala — https://vk.ru/club242182095
 13. Marla Singer — https://vk.ru/club225748917
 14. Татьяна Крявкина - https://vk.ru/club242418956
@@ -63,71 +63,44 @@ WELCOME_TEXT: str = """🚪 ДОБРО ПОЖАЛОВАТЬ В ROYAL LOBBY!
 SUCCESS_TEXT: str = "[id{uid}|{name}], проверка пройдена! ✅ Ожидайте админа."
 FAIL_TEXT: str = "[id{uid}|{name}], проверка не пройдена. ❌ Вы не подписаны на:\n{groups}\n\nПодпишитесь и напишите «ГОТОВО» снова."
 
-
 def extract_group_id(url: str):
+    # Если в ссылке есть /club или /public, возвращаем всё после этого слова
     if "/club" in url:
-        return url.split("club")[-1].lstrip("/")
+        return url.split("club")[-1]   # Оставляем только цифры
     elif "/public" in url:
-        return url.split("public")[-1].lstrip("/")
+        return url.split("public")[-1] # Оставляем только цифры
     else:
         return None
 
-
 def delete_message(peer_id: int, message_id: int) -> None:
     try:
-        vk_session.method(
-            "messages.delete",
-            {"message_ids": message_id, "delete_for_all": 1}
-        )
+        vk_session.method("messages.delete", {
+            "message_ids": message_id,
+            "delete_for_all": 1  # Удаляет для всех участников чата
+        })
     except Exception as e:
         print(f"[ERROR] Delete: {e}")
 
-
 def send_message(peer_id: int, message: str) -> None:
     try:
-        vk_session.method(
-            "messages.send",
-            {
-                "peer_id": peer_id,
-                "message": message,
-                "random_id": get_random_id(),
-                "dont_parse_links": 1
-            }
-        )
+        vk_session.method("messages.send", {"peer_id": peer_id, "message": message, "random_id": get_random_id(), "dont_parse_links": 1})
     except Exception as e:
         print(f"[ERROR] Send: {e}")
 
-
 def get_user_name(user_id: int) -> str:
     try:
-        response = vk_session.method(
-            "users.get",
-            {"user_ids": user_id, "fields": "first_name,last_name"}
-        )
-        if response and isinstance(response[0], dict):
-            name = f"{response[0].get('first_name', '')} {response[0].get('last_name', '')}".strip()
-            return name or "Участник"
+        response = vk_session.method("users.get", {"user_ids": user_id, "fields": "first_name,last_name"})
+        if response:
+            user = response[0]
+            name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
+            return name if name else "Участник"
     except Exception:
         pass
     return "Участник"
 
-
-# Функция для очистки старых записей раз в минуту (фоновый поток)
-def cleanup_loop():
-    while True:
-        with memory_lock:
-            keys_to_remove = [k for k, v in processed_updates.items() if time.time() - v > 60]
-            for k in keys_to_remove:
-                del processed_updates[k]
-        time.sleep(60)
-
-threading.Thread(target=cleanup_loop, daemon=True).start()
-
-
 @app.get("/")
 async def confirmation() -> Response:
     return Response(content=CONFIRM_TOKEN, media_type="text/plain", status_code=200)
-
 
 @app.post("/")
 async def webhook(request: Request):
@@ -137,43 +110,43 @@ async def webhook(request: Request):
         print(f"[ERROR] JSON parse error: {e}")
         return {"error": "invalid json"}
 
-    secret = data.get("secret")
-    update_id = data.get("update_id")
+    if data.get("secret") != SECRET_KEY:
+        return {"error": "invalid secret"}
 
-    if not all([data, secret == SECRET_KEY]):
-        return {"status": "not our chat"}
+    # Сразу отвечаем ВК! Это критически важно для скорости.
+    response = Response(content="ok", status_code=200)
     
     async def process_request(data):  
+        with memory_lock:
+            last_update_id = getattr(webhook, 'last_update_id', -1)
+        
+        update_id = data.get('update_id')
+        if update_id is not None and update_id == last_update_id:
+            print("[DEBUG] Дубликат события")
+            return
+        if update_id is not None:
+            setattr(webhook, 'last_update_id', update_id)  # Запоминаем последний ID
+
         msg = data.get("object").get("message", {})
         
-        # Базовая фильтрация объекта сообщения
+        # *** КРИТИЧЕСКАЯ ПРОВЕРКА ***
         if not all([
             msg,
             msg.get('peer_id'),
             msg.get('from_id'), 
-            msg.get('text') is not None,
-            msg.get('id') is not None   # Проверка id != null
+            msg.get('text'), 
+            msg.get('id') is not None   # Важно для сообщений с id = 0
         ]):
             print("[DEBUG] Получен неполный объект сообщения. Игнорируем.")
-            return
-        
-        from_id = msg["from_id"]
+            return  # Выходим из обработчика, ничего не делаем
+
+        if msg.get("peer_id") != CHAT_PEER_ID:
+            return {"status": "not our chat"}
+
+        from_id = msg.get("from_id")
         text = msg.get("text", "").strip().lower()
         action = msg.get("action")
-        peer_id = msg.get("peer_id")
-        
-        # Защита от повторных вызовов по одному событию
-        with memory_lock:
-            if str(update_id) in processed_updates:
-                print("[DEBUG] Дубликат события")
-                return
-            processed_updates[str(update_id)] = time.time()
-            
-            # Убираем старые записи (если их больше MAX_HISTORY)
-            if len(processed_updates) > MAX_HISTORY:
-                oldest_key = min(processed_updates, key=lambda x: processed_updates[x])
-                del processed_updates[oldest_key]
-        
+
         # --- ПРИВЕТСТВИЕ ---
         if action and action.get("type") == "chat_invite_user" and action.get("member_id") == from_id:
             with memory_lock:
@@ -183,53 +156,56 @@ async def webhook(request: Request):
                     send_message(CHAT_PEER_ID, f"[id{from_id}|{member_names[from_id]}], {WELCOME_TEXT}")
             return {"status": "ok"}
 
-        # --- ПРОВЕРКА ПОДПИСОК ТОЛЬКО НА КОМАНДУ ГОТОВО ---
-        if text != "готово":
-            return {"status": "not our command"}
-
-        current_time = int(time.time())
-        with memory_lock:
-            last_time = last_check_time.get(from_id, 0)
-        if current_time - last_time < 5:
-            return {"status": "too frequent"}
-        
-        with memory_lock:
-            last_check_time[from_id] = current_time
-
-        name = member_names.get(from_id, get_user_name(from_id))
-        send_message(CHAT_PEER_ID, f"[id{from_id}|{name}], пожалуйста ожидайте, идёт проверка...")
-
-        missing = []
-        for url in GROUPS:
-            gid_str = extract_group_id(url)
-            if not gid_str:
-                continue
-                
-            group_id_int = int(gid_str)
-            res = vk_session.method("groups.isMember", {"user_id": from_id, "group_id": group_id_int})
-            print(f"[DEBUG] Проверка {url} (ID: {group_id_int}) -> Ответ API: {res}")
+        # --- ПРОВЕРКА ПОДПИСОК ---
+        elif text == "готово":
+            name = member_names.get(from_id, get_user_name(from_id))
+            current_time = int(time.time())
             
-            # Обработка закрытых групп (код ошибки 203)
-            if isinstance(res, dict) and 'error' in res and res['error'].get('error_code') == 203:
-                print(f"[DEBUG] Пропускаем закрытую группу {url}, считаем пользователя подписанным.")
-                continue
+            with memory_lock:
+                last_time = last_check_time.get(from_id, 0)
+            if current_time - last_time < 300:
+                return {"status": "ok"}  # Повторная проверка запрещена на 5 мин
+            
+            with memory_lock:
+                last_check_time[from_id] = current_time
+
+            # Мгновенно отвечаем пользователю
+            send_message(CHAT_PEER_ID, f"[id{from_id}|{name}], пожалуйста ожидайте, идёт проверка...")
+
+            missing = []
+            for url in GROUPS:
+                gid_str = extract_group_id(url)
+                if not gid_str:
+                    continue
                 
-            if res not in [1, 2]:
-                missing.append(url)
-        
-        print(f"[DEBUG] --- РЕЗУЛЬТАТ: Бот считает, что не хватает: {missing} ---")
+                try:
+                    group_id_int = int(gid_str)
+                    res = vk_session.method("groups.isMember", {"user_id": from_id, "group_id": group_id_int})
+                    print(f"[DEBUG] Проверка {url} (ID: {group_id_int}) -> Ответ API: {res}")
+                    
+                    if isinstance(res, dict) and 'error' in res and res['error']['error_code'] == 203:
+                        print(f"[DEBUG] Пропускаем закрытую группу {url}, считаем пользователя подписанным.")
+                        continue
+                        
+                    if res not in [1, 2]:
+                        missing.append(url)
+                except Exception as e:
+                    print(f"[DEBUG] Ошибка API для {url}: {e}")
+                    missing.append(url)
+            
+            print(f"[DEBUG] --- РЕЗУЛЬТАТ: Бот считает, что не хватает: {missing} ---")
 
-        if not missing:
-            send_message(CHAT_PEER_ID, SUCCESS_TEXT.format(uid=from_id, name=name))
-        else:
-            miss_text = "\n".join(missing[:5])
-            send_message(CHAT_PEER_ID, FAIL_TEXT.format(uid=from_id, name=name, groups=miss_text))
+            if not missing:
+                send_message(CHAT_PEER_ID, SUCCESS_TEXT.format(uid=from_id, name=name))
+            else:
+                miss_text = "\n".join(missing[:5])
+                send_message(CHAT_PEER_ID, FAIL_TEXT.format(uid=from_id, name=name, groups=miss_text))
 
-    import asyncio        
+    import asyncio
     asyncio.create_task(process_request(data))  # Запускаем долгую задачу параллельно
 
-    return Response(content="ok", status_code=200)
-
+    return response
+    #return {"status": "ok"}  # Быстро отвечаем ВК!
 
 if __name__ == "__main__":
     import uvicorn
