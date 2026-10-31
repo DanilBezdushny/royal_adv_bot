@@ -110,10 +110,10 @@ async def webhook(request: Request):
     if data.get("secret") != SECRET_KEY:
         return {"error": "invalid secret"}
 
-    # Сразу отвечаем ВК, чтобы он не ждал! Это критически важно для скорости.
+    # Сразу отвечаем ВК — это критически важно для скорости!
     response = Response(content="ok", status_code=200)
     
-    async def process_request(data):  # <--- Передаём data сюда!
+    async def process_request(data):  # Передаём data внутрь
         with memory_lock:
             last_update_id = getattr(webhook, 'last_update_id', -1)
         
@@ -126,17 +126,13 @@ async def webhook(request: Request):
 
         msg = data.get("object").get("message", {})
         
-        # Для диагностики выводим ВСЁ содержимое сообщения
-        print(f"[DEBUG] Полный объект сообщения: {data}")
-        
         # *** КРИТИЧЕСКАЯ ПРОВЕРКА ***
-                # *** КРИТИЧЕСКАЯ ПРОВЕРКА ***
         if not all([
             msg,
             msg.get('peer_id'),
             msg.get('from_id'),
-            msg.get('text'),
-            msg.get('id') is not None   # <--- Теперь всё будет работать!
+            msg.get('text'), 
+            msg.get('id') is not None   # Важно для сообщений с id = 0
         ]):
             print("[DEBUG] Получен неполный объект сообщения. Игнорируем.")
             return  # Выходим из обработчика, ничего не делаем
@@ -170,13 +166,8 @@ async def webhook(request: Request):
             with memory_lock:
                 last_check_time[from_id] = current_time
 
-            # Мгновенно отвечаем пользователю
+            # Мгновенно отвечаем пользователю (без ожидания проверки подписок!)
             send_message(CHAT_PEER_ID, f"[id{from_id}|{name}], пожалуйста ожидайте, идёт проверка...")
-
-            # Убираем команду пользователя из общего чата
-            msg_id = msg.get('id')
-            if msg_id is not None:
-                delete_message(CHAT_PEER_ID, msg_id)
 
             missing = []
             for url in GROUPS:
@@ -185,7 +176,7 @@ async def webhook(request: Request):
                     continue
                 
                 try:
-                    group_id_int = int(gid_str)
+                    group_id_int = int(gid_str)  # Оставляем ID положительным!
                     res = vk_session.method("groups.isMember", {"user_id": from_id, "group_id": group_id_int})
                     print(f"[DEBUG] Проверка {url} (ID: {group_id_int}) -> Ответ API: {res}")
                     
@@ -208,7 +199,7 @@ async def webhook(request: Request):
                 send_message(CHAT_PEER_ID, FAIL_TEXT.format(uid=from_id, name=name, groups=miss_text))
 
     import asyncio
-    asyncio.create_task(process_request(data))  # <-- Обязательно передай data!
+    asyncio.create_task(process_request(data))  # Запускаем долгую задачу параллельно
 
     return {"status": "ok"}  # Быстро отвечаем ВК!
 
