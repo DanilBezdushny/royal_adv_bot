@@ -125,7 +125,7 @@ async def webhook(request: Request) -> Dict:
             return {"status": "ok"}
 
         # --- ПРОВЕРКА ---
-        if not action and text == "готово":
+        if text == "готово":
             print(f"[DEBUG] Слово 'готово' от {from_id}")
             name: str = member_names.get(from_id, get_user_name(from_id))
             current_time: int = int(time.time())
@@ -139,13 +139,14 @@ async def webhook(request: Request) -> Dict:
                 last_check_time[from_id] = current_time
 
             missing: List[str] = []
-            print(f"[DEBUG] --- НАЧАЛО ПРОВЕРКИ {from_id} ---")
+            print(f"[DEBUG] --- НАЧАЛО ПРОВЕРКИ {from_id} ({name}) ---")
             for url in GROUPS:
                 gid_str = extract_group_id(url)
                 if not gid_str:
                     continue
                 try:
-                    group_id_int = -int(gid_str)
+                    # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: убираем минус перед ID
+                    group_id_int = int(gid_str) 
                     res = vk_session.method("groups.isMember", {"user_id": from_id, "group_id": group_id_int})
                     print(f"[DEBUG] Проверка {url} (ID: {group_id_int}) -> Ответ API: {res}")
                     if res not in [1, 2]:
@@ -154,7 +155,7 @@ async def webhook(request: Request) -> Dict:
                     print(f"[DEBUG] Ошибка API для {url}: {e}")
                     missing.append(url)
             
-            print(f"[DEBUG] --- РЕЗУЛЬТАТ: не хватает {missing} ---")
+            print(f"[DEBUG] --- РЕЗУЛЬТАТ: Бот считает, что не хватает: {missing} ---")
 
             if not missing:
                 send_message(CHAT_PEER_ID, SUCCESS_TEXT.format(uid=from_id, name=name))
