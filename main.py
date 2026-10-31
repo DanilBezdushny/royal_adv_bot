@@ -61,10 +61,14 @@ WELCOME_TEXT: str = """🚪 ДОБРО ПОЖАЛОВАТЬ В ROYAL LOBBY!
 SUCCESS_TEXT: str = "[id{uid}|{name}], проверка пройдена! ✅ Ожидайте админа."
 FAIL_TEXT: str = "[id{uid}|{name}], проверка не пройдена. ❌ Вы не подписаны на:\n{groups}\n\nПодпишитесь и напишите «ГОТОВО» снова."
 
-def extract_group_id(url: str) -> Optional[str]:
-    if "/club" in url or "/public" in url:
-        return url.split("/")[-1]
-    return None
+def extract_group_id(url: str):
+    # Если в ссылке есть /club или /public, возвращаем всё после этого слова
+    if "/club" in url:
+        return url.split("club")[-1]   # Оставляем только цифры
+    elif "/public" in url:
+        return url.split("public")[-1] # Оставляем только цифры
+    else:
+        return None
 
 def send_message(peer_id: int, message: str) -> None:
     try:
