@@ -45,7 +45,7 @@ GROUPS: List[str] = [
     "https://vk.ru/club242418956",
 ]
 
-WELCOME_TEXT: str = """🚪 ДОБРО ПОЖАЛОВАТЬ В ROYAL LOBBY!
+WELCOME_TEXT: str = """[id{uid}|{name}]🚪 ДОБРО ПОЖАЛОВАТЬ В ROYAL LOBBY!
 Вы попали в приёмную закрытого клуба взаимного продвижения Royal ADV. Сейчас в нашей команде только активные участники, которые ежедневно и честно продвигают друг друга в ВК.
 Чтобы получить пропуск в основное премиум-сообщество Royal ADV | Актив, вам необходимо выполнить главное условие клуба — оформить подписку на всех действующих резидентов.
 ✅ Действующие участники:
@@ -164,7 +164,7 @@ async def webhook(request: Request):
                 if not welcome_sent.get(from_id, False):
                     welcome_sent[from_id] = True
                     member_names[from_id] = get_user_name(from_id)
-                    send_message(CHAT_PEER_ID, f"[id{from_id}|{member_names[from_id]}], {WELCOME_TEXT}")
+                    send_message(CHAT_PEER_ID, WELCOME_TEXT.format(uid=from_id, name=name))
             return {"status": "ok"}
 
         # --- ПРОВЕРКА ПОДПИСОК ---
