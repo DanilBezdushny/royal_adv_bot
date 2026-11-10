@@ -300,8 +300,8 @@ async def webhook(request: Request):
             send_message(CHAT_PEER_ID, f"[id{action_member_id}|{name}], Переведен в основную беседу✅")
             return
 
-        # --- ПРИВЕТСТВИЕ ---
-        if action_type == "chat_invite_user" and action_member_id and peer_id == CHAT_PEER_ID:
+        # --- ПРИВЕТСТВИЕ (приглашение или вход по ссылке) ---
+        if action_member_id and peer_id == CHAT_PEER_ID and action_type in ("chat_invite_user", "chat_join_user"):
             with memory_lock:
                 if not WELCOME_SENT.get(action_member_id):
                     WELCOME_SENT[action_member_id] = int(time.time())
