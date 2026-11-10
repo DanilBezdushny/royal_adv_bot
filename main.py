@@ -25,7 +25,7 @@ vk_session: VkApi = VkApi(token=VK_TOKEN)
 
 # Кэш имён пользователей: {user_id: {"name": str, "time": timestamp}}
 user_cache: Dict[int, Dict[str, object]] = {}
-WELCOME_SENT: Dict[int, bool] = {}
+WELCOME_SENT: Dict[int, int] = {}
 LAST_CHECK_TIME: Dict[int, int] = {}
 CACHE_TTL = 3600  # 1 час
 CLEANUP_INTERVAL = 600  # 10 минут
@@ -288,17 +288,27 @@ async def webhook(request: Request):
 
         text = msg.get("text", "").strip().lower()
 
-        # --- ПРИВЕТСТВИЕ ---
-        invited_id = action.get("member_id") if action else None
-        
-        if invited_id is not None and peer_id == CHAT_PEER_ID:
-            with memory_lock:
-                if not WELCOME_SENT.get(invited_id, False):
-                    WELCOME_SENT[invited_id] = True
+        action_type = action.get("type") if action else None
+        action_member_id = action.get("member_id") if action else None
 
-            name = get_user_name(invited_id)
-            logger.info(f"Sending welcome to ID={invited_id}: {name}")
-            send_message(CHAT_PEER_ID, WELCOME_TEXT.format(uid=invited_id, name=name))
+        # --- КИК ИЗ ЧАТА ---
+        if action_type == "chat_kick_user" and action_member_id and peer_id == CHAT_PEER_ID:
+            with memory_lock:
+                WELCOME_SENT.pop(action_member_id, None)
+                LAST_CHECK_TIME.pop(action_member_id, None)
+            name = get_user_name(action_member_id)
+            send_message(CHAT_PEER_ID, f"[id{action_member_id}|{name}], Переведен в основную беседу✅")
+            return
+
+        # --- ПРИВЕТСТВИЕ ---
+        if action_type == "chat_invite_user" and action_member_id and peer_id == CHAT_PEER_ID:
+            with memory_lock:
+                if not WELCOME_SENT.get(action_member_id):
+                    WELCOME_SENT[action_member_id] = int(time.time())
+
+            name = get_user_name(action_member_id)
+            logger.info(f"Sending welcome to ID={action_member_id}: {name}")
+            send_message(CHAT_PEER_ID, WELCOME_TEXT.format(uid=action_member_id, name=name))
             return
 
         # --- ПРОВЕРКА ПОДПИСОК ---
