@@ -351,8 +351,13 @@ def start_longpoll():
     
     while True:
         try:
-            longpoll = VkLongPoll(vk_session, GROUP_ID)
-            for long_event in longpoll():
+            lp = VkLongPoll(vk_session, GROUP_ID)
+            try:
+                events = lp()
+            except TypeError:
+                events = lp.get_updates()
+            
+            for long_event in events:
                 if long_event.type == VkEventType.CHAT_JOIN_USER:
                     user_id = long_event.user_id
                     logger.info(f"Longpoll: user {user_id} joined chat")
