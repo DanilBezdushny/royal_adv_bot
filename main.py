@@ -147,11 +147,11 @@ def _cleanup_cache() -> None:
         if CHAT_PEER_ID > 0:
             try:
                 chat_id = CHAT_PEER_ID - 20000000000
-                members = vk_session.method("messages.getMembersChat", {
+                chat_info = vk_session.method("messages.getChat", {
                     "chat_id": chat_id,
-                    "fields": "id"
+                    "fields": "members"
                 })
-                current_ids = {m["id"] for m in members.get("members", [])}
+                current_ids = {m["id"] for m in chat_info.get("members", [])}
                 expired_members = [
                     uid for uid in KNOWN_CHAT_MEMBERS
                     if uid not in current_ids
@@ -276,11 +276,11 @@ async def startup_event():
                 if CHAT_PEER_ID > 0:
                     # chat_id = peer_id - 20000000000 для чатов
                     chat_id = CHAT_PEER_ID - 20000000000
-                    members = vk_session.method("messages.getMembersChat", {
+                    chat_info = vk_session.method("messages.getChat", {
                         "chat_id": chat_id,
-                        "fields": "id"
+                        "fields": "members"
                     })
-                    current_ids = {m["id"] for m in members.get("members", [])}
+                    current_ids = {m["id"] for m in chat_info.get("members", [])}
                     
                     with memory_lock:
                         for uid in current_ids:
