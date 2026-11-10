@@ -1,14 +1,13 @@
 from fastapi import FastAPI, Request, Response
 import os
 import time
-import threading
 from typing import Optional, Dict, List
 from vk_api import VkApi
-from vk_api.longpoll import VkLongPoll, VkEventType
 from vk_api.utils import get_random_id
 from dotenv import load_dotenv
 import logging
 import asyncio
+import threading
 
 load_dotenv()
 
@@ -20,7 +19,6 @@ VK_TOKEN: str = os.getenv("VK_COMMUNITY_TOKEN", "")
 CONFIRM_TOKEN: str = os.getenv("CONFIRMATION_TOKEN", "")
 SECRET_KEY: str = os.getenv("SECRET_KEY", "")
 CHAT_PEER_ID: int = int(os.getenv("CHAT_PEER_ID", "0"))
-GROUP_ID: int = int(os.getenv("GROUP_ID", "0"))
 
 app: FastAPI = FastAPI()
 vk_session: VkApi = VkApi(token=VK_TOKEN)
@@ -345,40 +343,6 @@ async def webhook(request: Request):
     return Response(content="ok", status_code=200)
 
 
-def start_longpoll():
-    """Запускает Longpoll сервер для отслеживания входа участников."""
-    logger.info("Starting Longpoll server...")
-    
-    while True:
-        try:
-            lp = VkLongPoll(vk_session, GROUP_ID)
-            try:
-                events = lp()
-            except TypeError:
-                events = lp.get_updates()
-            
-            for long_event in events:
-                if long_event.type == VkEventType.CHAT_JOIN_USER:
-                    user_id = long_event.user_id
-                    logger.info(f"Longpoll: user {user_id} joined chat")
-                    
-                    with memory_lock:
-                        if not WELCOME_SENT.get(user_id):
-                            WELCOME_SENT[user_id] = int(time.time())
-                    
-                    name = get_user_name(user_id)
-                    send_message(CHAT_PEER_ID, WELCOME_TEXT.format(uid=user_id, name=name))
-        except Exception as e:
-            logger.error(f"Longpoll error: {e}")
-            time.sleep(5)
-
-
 if __name__ == "__main__":
     import uvicorn
-    
-    # Запускаем Longpoll в отдельном потоке
-    longpoll_thread = threading.Thread(target=start_longpoll, daemon=True)
-    longpoll_thread.start()
-    logger.info("Longpoll thread started")
-    
     uvicorn.run(app, host="0.0.0.0", port=3000, reload=False, workers=1)
