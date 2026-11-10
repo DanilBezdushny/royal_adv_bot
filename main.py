@@ -27,6 +27,7 @@ vk_session: VkApi = VkApi(token=VK_TOKEN)
 user_cache: Dict[int, Dict[str, object]] = {}
 WELCOME_SENT: Dict[int, int] = {}
 LAST_CHECK_TIME: Dict[int, int] = {}
+KNOWN_CHAT_MEMBERS: Dict[int, int] = {}  # {user_id: joined_timestamp}
 CACHE_TTL = 3600  # 1 час
 CLEANUP_INTERVAL = 600  # 10 минут
 memory_lock = threading.Lock()
@@ -136,11 +137,29 @@ def _cleanup_cache() -> None:
             del LAST_CHECK_TIME[uid]
         
         expired_welcome = [
-            uid for uid, sent in WELCOME_SENT.items()
-            if now - sent > CACHE_TTL
+            uid for uid, ts in WELCOME_SENT.items()
+            if now - ts > CACHE_TTL
         ]
         for uid in expired_welcome:
             del WELCOME_SENT[uid]
+        
+        # Обновляем KNOWN_CHAT_MEMBERS — удаляем тех, кого нет в чате
+        if CHAT_PEER_ID > 0:
+            try:
+                chat_id = CHAT_PEER_ID - 20000000000
+                members = vk_session.method("messages.getMembersChat", {
+                    "chat_id": chat_id,
+                    "fields": "id"
+                })
+                current_ids = {m["id"] for m in members.get("members", [])}
+                expired_members = [
+                    uid for uid in KNOWN_CHAT_MEMBERS
+                    if uid not in current_ids
+                ]
+                for uid in expired_members:
+                    del KNOWN_CHAT_MEMBERS[uid]
+            except Exception as e:
+                logger.error(f"Error updating chat members: {e}")
 
 
 def get_user_name(user_id: int) -> str:
@@ -237,7 +256,7 @@ for url in GROUPS:
 
 @app.on_event("startup")
 async def startup_event():
-    """Запускает фоновую очистку кэша."""
+    """Запускает фоновую очистку кэша и проверку участников чата."""
     import asyncio
     
     async def cleanup_loop():
@@ -249,7 +268,34 @@ async def startup_event():
             except Exception as e:
                 logger.error(f"Cleanup error: {e}")
     
+    async def check_chat_members():
+        """Периодически проверяет новых участников чата."""
+        await asyncio.sleep(30)  # Пауза при старте
+        while True:
+            try:
+                if CHAT_PEER_ID > 0:
+                    # chat_id = peer_id - 20000000000 для чатов
+                    chat_id = CHAT_PEER_ID - 20000000000
+                    members = vk_session.method("messages.getMembersChat", {
+                        "chat_id": chat_id,
+                        "fields": "id"
+                    })
+                    current_ids = {m["id"] for m in members.get("members", [])}
+                    
+                    with memory_lock:
+                        for uid in current_ids:
+                            if uid not in KNOWN_CHAT_MEMBERS and uid not in WELCOME_SENT:
+                                KNOWN_CHAT_MEMBERS[uid] = int(time.time())
+                                WELCOME_SENT[uid] = int(time.time())
+                                name = get_user_name(uid)
+                                logger.info(f"Auto-welcome chat member ID={uid}: {name}")
+                                send_message(CHAT_PEER_ID, WELCOME_TEXT.format(uid=uid, name=name))
+            except Exception as e:
+                logger.error(f"Chat members check error: {e}")
+            await asyncio.sleep(5)  # Проверка каждые 5 секунд
+    
     asyncio.create_task(cleanup_loop())
+    asyncio.create_task(check_chat_members())
 
 
 @app.get("/")
@@ -297,7 +343,7 @@ async def webhook(request: Request):
                 WELCOME_SENT.pop(action_member_id, None)
                 LAST_CHECK_TIME.pop(action_member_id, None)
             name = get_user_name(action_member_id)
-            send_message(CHAT_PEER_ID, f"[id{action_member_id}|{name}], Переведен в основную беседу✅")
+            send_message(CHAT_PEER_ID, f"[id{action_member_id}|{name}] был переведен в основную беседу✅")
             return
 
         # --- ПРИВЕТСТВИЕ (приглашение или вход по ссылке) ---
