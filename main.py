@@ -24,7 +24,6 @@ GROUP_ID: int = int(os.getenv("GROUP_ID", "0"))
 
 app: FastAPI = FastAPI()
 vk_session: VkApi = VkApi(token=VK_TOKEN)
-longpoll: VkLongPoll = VkLongPoll(vk_session, GROUP_ID)
 
 # Кэш имён пользователей: {user_id: {"name": str, "time": timestamp}}
 user_cache: Dict[int, Dict[str, object]] = {}
@@ -352,7 +351,8 @@ def start_longpoll():
     
     while True:
         try:
-            for long_event in longpoll.longpoll():
+            longpoll = VkLongPoll(vk_session, GROUP_ID)
+            for long_event in longpoll():
                 if long_event.type == VkEventType.CHAT_JOIN_USER:
                     user_id = long_event.user_id
                     logger.info(f"Longpoll: user {user_id} joined chat")
