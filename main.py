@@ -4,6 +4,7 @@ import time
 import threading
 from typing import Optional, Dict, List
 from vk_api import VkApi
+from vk_api.longpoll import VkLongPoll, VkEventType
 from vk_api.utils import get_random_id
 from dotenv import load_dotenv
 import logging
@@ -19,15 +20,16 @@ VK_TOKEN: str = os.getenv("VK_COMMUNITY_TOKEN", "")
 CONFIRM_TOKEN: str = os.getenv("CONFIRMATION_TOKEN", "")
 SECRET_KEY: str = os.getenv("SECRET_KEY", "")
 CHAT_PEER_ID: int = int(os.getenv("CHAT_PEER_ID", "0"))
+GROUP_ID: int = int(os.getenv("GROUP_ID", "0"))
 
 app: FastAPI = FastAPI()
 vk_session: VkApi = VkApi(token=VK_TOKEN)
+longpoll: VkLongPoll = VkLongPoll(vk_session, GROUP_ID)
 
 # Кэш имён пользователей: {user_id: {"name": str, "time": timestamp}}
 user_cache: Dict[int, Dict[str, object]] = {}
 WELCOME_SENT: Dict[int, int] = {}
 LAST_CHECK_TIME: Dict[int, int] = {}
-KNOWN_CHAT_MEMBERS: Dict[int, int] = {}  # {user_id: joined_timestamp}
 CACHE_TTL = 3600  # 1 час
 CLEANUP_INTERVAL = 600  # 10 минут
 memory_lock = threading.Lock()
@@ -142,24 +144,6 @@ def _cleanup_cache() -> None:
         ]
         for uid in expired_welcome:
             del WELCOME_SENT[uid]
-        
-        # Обновляем KNOWN_CHAT_MEMBERS — удаляем тех, кого нет в чате
-        if CHAT_PEER_ID > 0:
-            try:
-                chat_id = CHAT_PEER_ID - 20000000000
-                chat_info = vk_session.method("messages.getChat", {
-                    "chat_id": chat_id,
-                    "fields": "members"
-                })
-                current_ids = {m["id"] for m in chat_info.get("members", [])}
-                expired_members = [
-                    uid for uid in KNOWN_CHAT_MEMBERS
-                    if uid not in current_ids
-                ]
-                for uid in expired_members:
-                    del KNOWN_CHAT_MEMBERS[uid]
-            except Exception as e:
-                logger.error(f"Error updating chat members: {e}")
 
 
 def get_user_name(user_id: int) -> str:
@@ -256,7 +240,7 @@ for url in GROUPS:
 
 @app.on_event("startup")
 async def startup_event():
-    """Запускает фоновую очистку кэша и проверку участников чата."""
+    """Запускает фоновую очистку кэша."""
     import asyncio
     
     async def cleanup_loop():
@@ -268,34 +252,7 @@ async def startup_event():
             except Exception as e:
                 logger.error(f"Cleanup error: {e}")
     
-    async def check_chat_members():
-        """Периодически проверяет новых участников чата."""
-        await asyncio.sleep(30)  # Пауза при старте
-        while True:
-            try:
-                if CHAT_PEER_ID > 0:
-                    # chat_id = peer_id - 20000000000 для чатов
-                    chat_id = CHAT_PEER_ID - 20000000000
-                    chat_info = vk_session.method("messages.getChat", {
-                        "chat_id": chat_id,
-                        "fields": "members"
-                    })
-                    current_ids = {m["id"] for m in chat_info.get("members", [])}
-                    
-                    with memory_lock:
-                        for uid in current_ids:
-                            if uid not in KNOWN_CHAT_MEMBERS and uid not in WELCOME_SENT:
-                                KNOWN_CHAT_MEMBERS[uid] = int(time.time())
-                                WELCOME_SENT[uid] = int(time.time())
-                                name = get_user_name(uid)
-                                logger.info(f"Auto-welcome chat member ID={uid}: {name}")
-                                send_message(CHAT_PEER_ID, WELCOME_TEXT.format(uid=uid, name=name))
-            except Exception as e:
-                logger.error(f"Chat members check error: {e}")
-            await asyncio.sleep(5)  # Проверка каждые 5 секунд
-    
     asyncio.create_task(cleanup_loop())
-    asyncio.create_task(check_chat_members())
 
 
 @app.get("/")
@@ -389,6 +346,34 @@ async def webhook(request: Request):
     return Response(content="ok", status_code=200)
 
 
+def start_longpoll():
+    """Запускает Longpoll сервер для отслеживания входа участников."""
+    logger.info("Starting Longpoll server...")
+    
+    while True:
+        try:
+            for long_event in longpoll.longpoll():
+                if long_event.type == VkEventType.CHAT_JOIN_USER:
+                    user_id = long_event.user_id
+                    logger.info(f"Longpoll: user {user_id} joined chat")
+                    
+                    with memory_lock:
+                        if not WELCOME_SENT.get(user_id):
+                            WELCOME_SENT[user_id] = int(time.time())
+                    
+                    name = get_user_name(user_id)
+                    send_message(CHAT_PEER_ID, WELCOME_TEXT.format(uid=user_id, name=name))
+        except Exception as e:
+            logger.error(f"Longpoll error: {e}")
+            time.sleep(5)
+
+
 if __name__ == "__main__":
     import uvicorn
+    
+    # Запускаем Longpoll в отдельном потоке
+    longpoll_thread = threading.Thread(target=start_longpoll, daemon=True)
+    longpoll_thread.start()
+    logger.info("Longpoll thread started")
+    
     uvicorn.run(app, host="0.0.0.0", port=3000, reload=False, workers=1)
